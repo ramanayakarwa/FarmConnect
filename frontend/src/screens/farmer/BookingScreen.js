@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 
 import { bookingService } from '../../services/bookingService';
 import { calculateDays, calculateTotal } from '../../utils/helpers';
+import { getEquipmentLocalImage } from '../../utils/equipmentImages';
 
 export default function BookingScreen({ route, navigation }) {
   const { t } = useTranslation();
@@ -170,7 +171,7 @@ export default function BookingScreen({ route, navigation }) {
           {/* Equipment Info Summary */}
           <View style={styles.summaryCard}>
             <Image
-              source={{ uri: equipment.image }}
+              source={getEquipmentLocalImage(equipment)}
               style={styles.summaryImage}
             />
 

@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 
 import { formatPrice } from '../../utils/helpers';
+import { getEquipmentLocalImage } from '../../utils/equipmentImages';
 
 const { width } = Dimensions.get('window');
 
@@ -77,7 +78,7 @@ export default function EquipmentDetailScreen({ route, navigation }) {
 
         <View style={styles.imageContainer}>
           <Image
-            source={{ uri: equipmentData.image }}
+            source={getEquipmentLocalImage(equipmentData)}
             style={styles.image}
             resizeMode="cover"
           />

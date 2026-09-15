@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 
 import { StatusBadge } from './StatusBadge';
 import { formatDate } from '../utils/helpers';
+import { getEquipmentLocalImage } from '../utils/equipmentImages';
 
 export const BookingCard = ({
   booking,
@@ -28,7 +29,10 @@ export const BookingCard = ({
       activeOpacity={0.9}
     >
       <Image
-        source={{ uri: booking.equipment_image }}
+        source={getEquipmentLocalImage({
+          category: booking.equipment_category,
+          name: booking.equipment_name,
+        })}
         style={styles.image}
         resizeMode="cover"
       />
