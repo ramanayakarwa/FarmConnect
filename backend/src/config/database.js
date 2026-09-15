@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+
 require('dotenv').config();
 
 const pool = new Pool({
@@ -7,9 +8,14 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
+
+  // Neon PostgreSQL requires SSL
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
-// Test connection on startup
+// Test connection
 pool.connect()
   .then((client) => {
     console.log('✅ PostgreSQL Connected Successfully');
