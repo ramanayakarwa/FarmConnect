@@ -1,0 +1,1 @@
+export const CATEGORIES = ['All', 'Tractor', 'Rotavator', 'Seed Drill', 'Boom Sprayer'];
