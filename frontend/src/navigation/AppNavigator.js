@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useAuth } from '../context/AuthContext';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -18,7 +18,7 @@ import AddEquipmentScreen from '../screens/provider/AddEquipmentScreen';
 import FarmerTabNavigator from './FarmerTabNavigator';
 import ProviderTabNavigator from './ProviderTabNavigator';
 
-const Stack = createStackNavigator();
+const Stack = createNativeStackNavigator();
 
 export default function AppNavigator() {
   const { isLoading, user, isAuthenticated } = useAuth();

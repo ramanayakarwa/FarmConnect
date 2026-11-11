@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+
 import {
   View,
   Text,
@@ -8,45 +9,42 @@ import {
   StyleSheet,
   SafeAreaView,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
 } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 
 import equipmentService from '../../services/equipmentService';
+import { CATEGORIES } from '../../utils/categories';
 
-export default function AddEquipmentScreen({ route, navigation }) {
+export default function AddEquipmentScreen({
+  route,
+  navigation,
+}) {
   const { t } = useTranslation();
 
-  const { mode, equipment: editItem } =
-    route.params || { mode: 'add' };
+  const editItem = route?.params?.equipment;
+  const isEditing = route?.params?.mode === 'edit';
 
-  const categories = [
-    'Tractor',
-    'Rotavator',
-    'Seed Drill',
-    'Boom Sprayer',
-  ];
+  const categories = CATEGORIES.filter(
+    (item) => item !== 'All'
+  );
 
-  const getCategoryLabel = (category) => {
-    switch (category) {
-      case 'Tractor':
-        return t('tractor');
-      case 'Rotavator':
-        return t('rotavator');
-      case 'Seed Drill':
-        return t('seedDrill');
-      case 'Boom Sprayer':
-        return t('boomSprayer');
-      default:
-        return category;
-    }
-  };
+  // Preserve an existing category even if it is not
+  // included in the current category list.
+  if (
+    editItem?.category &&
+    !categories.includes(editItem.category)
+  ) {
+    categories.push(editItem.category);
+  }
 
-  const [name, setName] = useState(editItem?.name || '');
+  const [name, setName] = useState(
+    editItem?.name || ''
+  );
 
   const [category, setCategory] = useState(
     editItem?.category || categories[0]
@@ -57,23 +55,52 @@ export default function AddEquipmentScreen({ route, navigation }) {
   );
 
   const [price, setPrice] = useState(
-    editItem?.price
-      ? editItem.price.toString()
+    editItem?.price != null
+      ? String(editItem.price)
       : ''
   );
 
+  const [pricingType, setPricingType] = useState(
+    editItem?.pricing_type || 'per_day'
+  );
+
   const [location, setLocation] = useState(
-    editItem?.location || 'Pune, Maharashtra'
+    editItem?.location || ''
   );
 
   const [image, setImage] = useState(
-    editItem?.image ||
-      'https://images.unsplash.com/photo-1605338803939-52a14d0c8bca?w=400'
+    editItem?.image || ''
   );
 
   const [submitting, setSubmitting] = useState(false);
+  const submissionLock = useRef(false);
+
+  const getCategoryLabel = (value) => {
+    const translationKeys = {
+      Tractor: 'tractor',
+      Rotavator: 'rotavator',
+      'Seed Drill': 'seedDrill',
+      'Boom Sprayer': 'boomSprayer',
+    };
+
+    const key = translationKeys[value];
+
+    return key
+      ? t(key, { defaultValue: value })
+      : value;
+  };
 
   const handleSubmit = async () => {
+    if (submissionLock.current) return;
+
+    if (isEditing && !editItem?.id) {
+      Alert.alert(
+        'Unable to edit',
+        'Equipment details are missing. Open the equipment again.'
+      );
+      return;
+    }
+
     if (
       !name.trim() ||
       !description.trim() ||
@@ -81,88 +108,103 @@ export default function AddEquipmentScreen({ route, navigation }) {
       !location.trim()
     ) {
       Alert.alert(
-        t('error'),
-        t('pleaseFillAllDetails')
+        'Missing details',
+        'Enter the equipment name, description, rental rate and location.'
       );
       return;
     }
 
-    const priceVal = parseFloat(price);
+    const numericPrice = Number(price);
 
-    if (isNaN(priceVal) || priceVal <= 0) {
+    if (
+      !Number.isFinite(numericPrice) ||
+      numericPrice <= 0 ||
+      numericPrice >= 100000000
+    ) {
       Alert.alert(
-        t('error'),
-        t('validPrice')
+        'Invalid rate',
+        'Enter a positive rental rate below ₹100,000,000.'
       );
       return;
     }
 
+    if (!/^\d+(\.\d{1,2})?$/.test(price.trim())) {
+      Alert.alert(
+        'Invalid rate',
+        'Enter a number with no more than two decimal places.'
+      );
+      return;
+    }
+
+    if (
+      !['per_acre', 'per_day'].includes(pricingType)
+    ) {
+      Alert.alert(
+        'Choose pricing',
+        'Select Per Acre or Per Day.'
+      );
+      return;
+    }
+
+    if (!categories.includes(category)) {
+      Alert.alert(
+        'Choose a category',
+        'Select an equipment category.'
+      );
+      return;
+    }
+
+    submissionLock.current = true;
     setSubmitting(true);
 
     try {
-      if (mode === 'add') {
-        const newItem = {
-          name: name.trim(),
-          category,
-          description: description.trim(),
-          image,
-          price: priceVal,
-          location: location.trim(),
-          availability: true,
-          specifications: {
-            category,
-            condition: 'Excellent',
-            year: 2023,
-          },
-        };
+      const equipmentData = {
+        name: name.trim(),
+        category,
+        description: description.trim(),
+        price: numericPrice,
+        pricing_type: pricingType,
+        location: location.trim(),
+        image: image.trim(),
+      };
 
-        await equipmentService.createEquipment(newItem);
-
-        Alert.alert(
-          t('success'),
-          t('equipmentAddedSuccess'),
-          [
-            {
-              text: t('ok'),
-              onPress: () => navigation.goBack(),
-            },
-          ]
-        );
-      } else {
-        const updatedItem = {
-          name: name.trim(),
-          category,
-          description: description.trim(),
-          image,
-          price: priceVal,
-          location: location.trim(),
-        };
-
+      if (isEditing) {
+        // Do not change availability while editing details.
         await equipmentService.updateEquipment(
           editItem.id,
-          updatedItem
+          equipmentData
         );
-
-        Alert.alert(
-          t('success'),
-          t('equipmentUpdatedSuccess'),
-          [
-            {
-              text: t('ok'),
-              onPress: () => navigation.goBack(),
-            },
-          ]
-        );
+      } else {
+        await equipmentService.createEquipment({
+          ...equipmentData,
+          availability: true,
+        });
       }
-    } catch (err) {
+
       Alert.alert(
-        t('error'),
-        err?.message ||
-          (mode === 'add'
-            ? t('failedToAddEquipment')
-            : t('failedToUpdateEquipment'))
+        'Success',
+        isEditing
+          ? 'Equipment updated successfully.'
+          : 'Equipment added successfully.',
+        [
+          {
+            text: 'OK',
+            onPress: () => navigation.goBack(),
+          },
+        ],
+        { cancelable: false }
       );
-    } finally {
+
+      // Keep submission locked after success until leaving.
+    } catch (error) {
+      Alert.alert(
+        'Unable to save',
+        error.response?.data?.message ||
+          error.message ||
+          'Please try again.'
+      );
+
+      submissionLock.current = false;
       setSubmitting(false);
     }
   };
@@ -170,18 +212,17 @@ export default function AddEquipmentScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
+        style={styles.flex}
         behavior={
-          Platform.OS === 'ios'
-            ? 'padding'
-            : 'height'
+          Platform.OS === 'ios' ? 'padding' : 'height'
         }
-        style={{ flex: 1 }}
       >
-        {/* HEADER */}
         <View style={styles.header}>
           <TouchableOpacity
             onPress={() => navigation.goBack()}
-            style={styles.backBtn}
+            disabled={submitting}
+            style={styles.backButton}
+            accessibilityLabel="Go back"
           >
             <Ionicons
               name="arrow-back"
@@ -191,227 +232,263 @@ export default function AddEquipmentScreen({ route, navigation }) {
           </TouchableOpacity>
 
           <Text style={styles.headerTitle}>
-            {mode === 'add'
-              ? t('addEquipment')
-              : t('editEquipment')}
+            {isEditing
+              ? t('editEquipment', {
+                  defaultValue: 'Edit Equipment',
+                })
+              : t('addEquipment', {
+                  defaultValue: 'Add Equipment',
+                })}
           </Text>
 
-          <View style={{ width: 40 }} />
+          <View style={styles.headerSpacer} />
         </View>
 
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
         >
-          {/* IMAGE */}
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>
-              {t('equipmentImage')}
+              Equipment details
             </Text>
 
-            {image ? (
-              <Image
-                source={{ uri: image }}
-                style={styles.previewImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={styles.imagePlaceholder}>
-                <Ionicons
-                  name="image-outline"
-                  size={48}
-                  color="#8D6E63"
-                />
-
-                <Text style={styles.placeholderText}>
-                  {t('previewWillAppear')}
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.inputBox}>
-              <Ionicons
-                name="link-outline"
-                size={18}
-                color="#8D6E63"
-                style={styles.inputIcon}
-              />
-
-              <TextInput
-                style={styles.input}
-                value={image}
-                onChangeText={setImage}
-                placeholder={t('pasteImageUrl')}
-                placeholderTextColor="#999"
-              />
-            </View>
-          </View>
-
-          {/* DETAILS */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>
-              {t('details')}
+            <Text style={styles.label}>
+              Equipment name
             </Text>
 
-            {/* NAME */}
-            <View style={styles.field}>
-              <Text style={styles.label}>
-                {t('equipmentName')}
-              </Text>
+            <TextInput
+              style={styles.input}
+              value={name}
+              onChangeText={setName}
+              placeholder="Example: Mahindra 475 DI Tractor"
+              placeholderTextColor="#888"
+              maxLength={100}
+              editable={!submitting}
+            />
 
-              <View style={styles.inputBox}>
-                <Ionicons
-                  name="pricetag-outline"
-                  size={18}
-                  color="#8D6E63"
-                  style={styles.inputIcon}
-                />
+            <Text style={styles.label}>
+              Category
+            </Text>
 
-                <TextInput
-                  style={styles.input}
-                  value={name}
-                  onChangeText={setName}
-                  placeholder={t('equipmentNamePlaceholder')}
-                  placeholderTextColor="#999"
-                />
-              </View>
-            </View>
+            <View style={styles.categoryList}>
+              {categories.map((item) => {
+                const selected = category === item;
 
-            {/* CATEGORY */}
-            <View style={styles.field}>
-              <Text style={styles.label}>
-                {t('category')}
-              </Text>
-
-              <View style={styles.catRow}>
-                {categories.map((cat) => (
+                return (
                   <TouchableOpacity
-                    key={cat}
+                    key={item}
+                    onPress={() => setCategory(item)}
+                    disabled={submitting}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
                     style={[
-                      styles.catChip,
-                      category === cat &&
-                        styles.catChipActive,
+                      styles.categoryButton,
+                      selected &&
+                        styles.categoryButtonSelected,
                     ]}
-                    onPress={() =>
-                      setCategory(cat)
-                    }
                   >
                     <Text
                       style={[
-                        styles.catText,
-                        category === cat &&
-                          styles.catTextActive,
+                        styles.categoryText,
+                        selected &&
+                          styles.categoryTextSelected,
                       ]}
                     >
-                      {getCategoryLabel(cat)}
+                      {getCategoryLabel(item)}
                     </Text>
                   </TouchableOpacity>
-                ))}
-              </View>
+                );
+              })}
             </View>
 
-            {/* PRICE */}
-            <View style={styles.field}>
-              <Text style={styles.label}>
-                {t('rentalPrice')}
-              </Text>
+            <Text style={styles.label}>
+              Description
+            </Text>
 
-              <View style={styles.inputBox}>
-                <Ionicons
-                  name="cash-outline"
-                  size={18}
-                  color="#8D6E63"
-                  style={styles.inputIcon}
-                />
-
-                <TextInput
-                  style={styles.input}
-                  value={price}
-                  onChangeText={setPrice}
-                  placeholder={t('pricePlaceholder')}
-                  keyboardType="numeric"
-                  placeholderTextColor="#999"
-                />
-              </View>
-            </View>
-
-            {/* LOCATION */}
-            <View style={styles.field}>
-              <Text style={styles.label}>
-                {t('location')}
-              </Text>
-
-              <View style={styles.inputBox}>
-                <Ionicons
-                  name="location-outline"
-                  size={18}
-                  color="#8D6E63"
-                  style={styles.inputIcon}
-                />
-
-                <TextInput
-                  style={styles.input}
-                  value={location}
-                  onChangeText={setLocation}
-                  placeholder={t('locationPlaceholder')}
-                  placeholderTextColor="#999"
-                />
-              </View>
-            </View>
-
-            {/* DESCRIPTION */}
-            <View style={styles.field}>
-              <Text style={styles.label}>
-                {t('description')}
-              </Text>
-
-              <TextInput
-                style={[
-                  styles.inputBox,
-                  styles.textArea,
-                ]}
-                value={description}
-                onChangeText={setDescription}
-                placeholder={t('descriptionPlaceholder')}
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={4}
-              />
-            </View>
+            <TextInput
+              style={[
+                styles.input,
+                styles.descriptionInput,
+              ]}
+              value={description}
+              onChangeText={setDescription}
+              placeholder="Describe the equipment and what the rental includes."
+              placeholderTextColor="#888"
+              multiline
+              textAlignVertical="top"
+              maxLength={2000}
+              editable={!submitting}
+            />
           </View>
-        </ScrollView>
 
-        {/* FOOTER */}
-        <View style={styles.footer}>
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>
+              Rental pricing
+            </Text>
+
+            <Text style={styles.hint}>
+              Choose how farmers will be charged.
+            </Text>
+
+            <View style={styles.pricingRow}>
+              {[
+                {
+                  value: 'per_acre',
+                  label: 'Per Acre',
+                  icon: 'leaf-outline',
+                },
+                {
+                  value: 'per_day',
+                  label: 'Per Day',
+                  icon: 'calendar-outline',
+                },
+              ].map((option) => {
+                const selected =
+                  pricingType === option.value;
+
+                return (
+                  <TouchableOpacity
+                    key={option.value}
+                    onPress={() =>
+                      setPricingType(option.value)
+                    }
+                    disabled={submitting}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    style={[
+                      styles.pricingButton,
+                      selected &&
+                        styles.pricingButtonSelected,
+                    ]}
+                  >
+                    <Ionicons
+                      name={option.icon}
+                      size={24}
+                      color={
+                        selected ? '#FFFFFF' : '#2E7D32'
+                      }
+                    />
+
+                    <Text
+                      style={[
+                        styles.pricingText,
+                        selected &&
+                          styles.pricingTextSelected,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={styles.label}>
+              {pricingType === 'per_acre'
+                ? 'Rental rate per acre (₹)'
+                : 'Rental rate per day (₹)'}
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              value={price}
+              onChangeText={setPrice}
+              placeholder="Example: 1500"
+              placeholderTextColor="#888"
+              keyboardType="decimal-pad"
+              maxLength={11}
+              editable={!submitting}
+            />
+
+            <Text style={styles.hint}>
+              {pricingType === 'per_acre'
+                ? 'Total = rate × acres. Example: ₹1,500 × 3 acres = ₹4,500.'
+                : 'Total = rate × booking days. Example: ₹1,500 × 2 days = ₹3,000.'}
+            </Text>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>
+              Location and image
+            </Text>
+
+            <Text style={styles.label}>
+              Equipment location
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              value={location}
+              onChangeText={setLocation}
+              placeholder="Village / city, district"
+              placeholderTextColor="#888"
+              maxLength={100}
+              editable={!submitting}
+            />
+
+            <Text style={styles.label}>
+              Image URL (optional)
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              value={image}
+              onChangeText={setImage}
+              placeholder="https://example.com/equipment.jpg"
+              placeholderTextColor="#888"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              maxLength={500}
+              editable={!submitting}
+            />
+
+            <Text style={styles.hint}>
+              {isEditing
+                ? 'Editing these details keeps the current availability setting.'
+                : 'New equipment will be available for booking. You can change availability from Equipment Management.'}
+            </Text>
+          </View>
+
           <TouchableOpacity
             style={[
-              styles.submitBtn,
-              submitting &&
-                styles.submitBtnDisabled,
+              styles.saveButton,
+              submitting && styles.disabled,
             ]}
             onPress={handleSubmit}
             disabled={submitting}
           >
             {submitting ? (
-              <ActivityIndicator
-                size="small"
-                color="#fff"
-              />
+              <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.submitText}>
-                {mode === 'add'
-                  ? t('addEquipmentToRent')
-                  : t('saveChanges')}
-              </Text>
+              <>
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={22}
+                  color="#FFFFFF"
+                />
+
+                <Text style={styles.saveButtonText}>
+                  {isEditing
+                    ? 'Save Changes'
+                    : 'Add Equipment'}
+                </Text>
+              </>
             )}
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
+
   safe: {
     flex: 1,
     backgroundColor: '#F5F5DC',
@@ -419,173 +496,164 @@ const styles = StyleSheet.create({
 
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
-    backgroundColor: '#fff',
   },
 
-  backBtn: {
-    padding: 4,
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  headerSpacer: {
+    width: 40,
   },
 
   headerTitle: {
-    fontSize: 18,
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 20,
     fontWeight: '800',
     color: '#1B1B1B',
   },
 
-  scroll: {
+  content: {
     padding: 16,
-    paddingBottom: 100,
+    paddingBottom: 40,
   },
 
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
   },
 
   sectionTitle: {
-    fontSize: 15,
+    fontSize: 18,
     fontWeight: '800',
-    color: '#1B1B1B',
+    color: '#2E7D32',
     marginBottom: 12,
-  },
-
-  previewImage: {
-    width: '100%',
-    height: 160,
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-
-  imagePlaceholder: {
-    width: '100%',
-    height: 160,
-    borderRadius: 12,
-    backgroundColor: '#F5F5DC',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    borderStyle: 'dashed',
-  },
-
-  placeholderText: {
-    fontSize: 13,
-    color: '#8D6E63',
-    fontWeight: '600',
-    marginTop: 4,
-  },
-
-  inputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9F9F9',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-  },
-
-  inputIcon: {
-    marginRight: 6,
-  },
-
-  input: {
-    flex: 1,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: '#1B1B1B',
-  },
-
-  field: {
-    marginBottom: 16,
   },
 
   label: {
-    fontSize: 13,
-    color: '#666',
+    fontSize: 14,
     fontWeight: '600',
-    marginBottom: 6,
+    color: '#333333',
+    marginTop: 10,
+    marginBottom: 8,
   },
 
-  catRow: {
+  input: {
+    borderWidth: 1,
+    borderColor: '#D0D0D0',
+    borderRadius: 10,
+    backgroundColor: '#FAFAFA',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#1B1B1B',
+    marginBottom: 8,
+  },
+
+  descriptionInput: {
+    minHeight: 100,
+  },
+
+  categoryList: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    marginBottom: 8,
   },
 
-  catChip: {
+  categoryButton: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: '#F5F5DC',
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: '#2E7D32',
+    borderRadius: 20,
+    marginRight: 8,
+    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
   },
 
-  catChipActive: {
+  categoryButtonSelected: {
     backgroundColor: '#2E7D32',
   },
 
-  catText: {
-    fontSize: 12,
+  categoryText: {
+    color: '#2E7D32',
+    fontSize: 13,
     fontWeight: '600',
+  },
+
+  categoryTextSelected: {
+    color: '#FFFFFF',
+  },
+
+  pricingRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginVertical: 12,
+  },
+
+  pricingButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
+    borderWidth: 1.5,
+    borderColor: '#2E7D32',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+  },
+
+  pricingButtonSelected: {
+    backgroundColor: '#2E7D32',
+  },
+
+  pricingText: {
+    marginTop: 6,
+    fontSize: 16,
+    fontWeight: '700',
     color: '#2E7D32',
   },
 
-  catTextActive: {
-    color: '#fff',
+  pricingTextSelected: {
+    color: '#FFFFFF',
   },
 
-  textArea: {
-    paddingVertical: 10,
-    height: 100,
-    textAlignVertical: 'top',
+  hint: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#666666',
+    marginBottom: 6,
   },
 
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#fff',
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-    elevation: 10,
-  },
-
-  submitBtn: {
-    backgroundColor: '#2E7D32',
-    borderRadius: 14,
-    paddingVertical: 16,
+  saveButton: {
+    flexDirection: 'row',
     alignItems: 'center',
-    elevation: 4,
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 54,
+    borderRadius: 12,
+    backgroundColor: '#2E7D32',
   },
 
-  submitBtnDisabled: {
-    opacity: 0.7,
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '700',
   },
 
-  submitText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '800',
+  disabled: {
+    opacity: 0.6,
   },
 });

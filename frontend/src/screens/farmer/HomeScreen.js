@@ -1,4 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   View,
@@ -8,530 +13,394 @@ import {
   StyleSheet,
   SafeAreaView,
   FlatList,
-  RefreshControl,
+  ActivityIndicator,
   Alert,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 
 import { EquipmentCard } from '../../components/EquipmentCard';
 import { FilterBar } from '../../components/FilterBar';
-import { LoadingSpinner } from '../../components/LoadingSpinner';
 
 import { useAuth } from '../../context/AuthContext';
 import { equipmentService } from '../../services/equipmentService';
 
-
-/* =========================================================
-   GREETING
-========================================================= */
-
 const getGreeting = (t) => {
   const hour = new Date().getHours();
 
-  if (hour < 12) return t('goodMorning');
-  if (hour < 17) return t('goodAfternoon');
+  if (hour < 12) {
+    return t('goodMorning', {
+      defaultValue: 'Good morning',
+    });
+  }
 
-  return t('goodEvening');
+  if (hour < 17) {
+    return t('goodAfternoon', {
+      defaultValue: 'Good afternoon',
+    });
+  }
+
+  return t('goodEvening', {
+    defaultValue: 'Good evening',
+  });
 };
 
-
-/* =========================================================
-   HOME SCREEN
-========================================================= */
+const normalize = (value) =>
+  String(value || '').trim().toLowerCase();
 
 export default function HomeScreen({ navigation }) {
-
   const { t } = useTranslation();
-
   const { user, logout } = useAuth();
 
   const [equipment, setEquipment] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
   const [search, setSearch] = useState('');
+  const [selectedCategory, setSelectedCategory] =
+    useState('All');
 
-  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [loggingOut, setLoggingOut] = useState(false);
 
+  // Ignore outdated requests when leaving the screen
+  // or when a newer refresh has started.
+  const requestVersion = useRef(0);
 
-  /* =======================================================
-     LOAD EQUIPMENT
-  ======================================================= */
+  const loadEquipment = useCallback(async () => {
+    const version = ++requestVersion.current;
 
-  const loadEquipment = async () => {
+    setLoading(true);
+    setError('');
 
     try {
+      const response =
+        await equipmentService.getEquipment({
+          availability: true,
+        });
 
-      setLoading(true);
+      if (version !== requestVersion.current) {
+        return;
+      }
 
-      const response = await equipmentService.getEquipment();
+      if (!Array.isArray(response?.data)) {
+        throw new Error(
+          'The server returned an invalid equipment list.'
+        );
+      }
 
-      setEquipment(response.data);
-
-    } catch (error) {
-
-      Alert.alert(
-        t('error'),
-        error?.message || t('somethingWentWrong')
+      // Also filter locally in case the API returns
+      // unavailable equipment.
+      const availableEquipment = response.data.filter(
+        (item) => item.availability === true
       );
 
+      setEquipment(availableEquipment);
+    } catch (err) {
+      if (version !== requestVersion.current) {
+        return;
+      }
+
+      setError(
+        err.response?.data?.message ||
+          err.message ||
+          'Unable to load equipment.'
+      );
     } finally {
-
-      setLoading(false);
-
+      if (version === requestVersion.current) {
+        setLoading(false);
+      }
     }
-
-  };
-
-
-  /* =======================================================
-     INITIAL LOAD
-  ======================================================= */
-
-  useEffect(() => {
-
-    loadEquipment();
-
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      loadEquipment();
 
-  /* =======================================================
-     REFRESH
-  ======================================================= */
+      return () => {
+        requestVersion.current += 1;
+      };
+    }, [loadEquipment])
+  );
 
-  const onRefresh = useCallback(async () => {
+  const filteredEquipment = useMemo(() => {
+    const query = normalize(search);
+    const chosenCategory = normalize(selectedCategory);
 
-    setRefreshing(true);
+    return equipment.filter((item) => {
+      const matchesCategory =
+        selectedCategory === 'All' ||
+        normalize(item.category) === chosenCategory;
 
-    await loadEquipment();
+      const searchableText = [
+        item.name,
+        item.category,
+        item.location,
+      ]
+        .map(normalize)
+        .join(' ');
 
-    setRefreshing(false);
+      const matchesSearch =
+        !query || searchableText.includes(query);
 
-  }, []);
+      return matchesCategory && matchesSearch;
+    });
+  }, [equipment, search, selectedCategory]);
 
+  const handleLogout = async () => {
+    if (loggingOut) return;
 
-  /* =======================================================
-     FILTER EQUIPMENT
-  ======================================================= */
+    setLoggingOut(true);
 
-  const getFilteredEquipment = () => {
-
-    let data = [...equipment];
-
-
-    /* CATEGORY FILTER */
-
-    if (selectedCategory !== 'All') {
-
-      data = data.filter((item) => {
-
-        const category = (item.category || '').toLowerCase();
-
-        const name = (item.name || '').toLowerCase();
-
-
-        switch (selectedCategory) {
-
-          case 'Tractor':
-
-            return category.includes('tractor');
-
-
-          case 'Rotavator':
-
-            return (
-              category.includes('rotavator') ||
-              name.includes('rotavator')
-            );
-
-
-          case 'Seed Drill':
-
-            return (
-              category.includes('seed') ||
-              name.includes('seed')
-            );
-
-
-          case 'Boom Sprayer':
-
-            return (
-              category.includes('sprayer') ||
-              name.includes('sprayer')
-            );
-
-
-          default:
-
-            return true;
-
-        }
-
-      });
-
-    }
-
-
-    /* SEARCH FILTER */
-
-    if (search.trim()) {
-
-      const q = search.toLowerCase();
-
-      data = data.filter(
-        (item) =>
-          (item.name || '').toLowerCase().includes(q) ||
-          (item.location || '').toLowerCase().includes(q) ||
-          (item.category || '').toLowerCase().includes(q)
+    try {
+      await logout();
+    } catch (err) {
+      Alert.alert(
+        'Unable to log out',
+        err.message || 'Please try again.'
       );
-
+    } finally {
+      setLoggingOut(false);
     }
-
-
-    return data;
-
   };
 
+  const clearFilters = () => {
+    setSearch('');
+    setSelectedCategory('All');
+  };
 
-  const filtered = getFilteredEquipment();
+  const hasFilters =
+    search.trim().length > 0 ||
+    selectedCategory !== 'All';
 
-
-  /* =======================================================
-     LOADING
-  ======================================================= */
-
-  if (loading) {
-
-    return (
-      <LoadingSpinner
-        message={t('loadingEquipment')}
-      />
-    );
-
-  }
-
-
-  /* =======================================================
-     LIST HEADER
-  ======================================================= */
-
-  const ListHeader = () => (
-
-    <View>
-
-
-      {/* ================= TOP BAR ================= */}
-
+  return (
+    <SafeAreaView style={styles.safe}>
       <View style={styles.topBar}>
-
         <View style={styles.greetingBlock}>
-
           <Text style={styles.greeting}>
-
-            {getGreeting(t)}, {user?.name?.split(' ')[0] || t('farmer')} 👋
-
+            {getGreeting(t)},{' '}
+            {user?.name?.split(' ')[0] || 'Farmer'}
           </Text>
 
-
-          <View style={styles.locationRow}>
-
-            <Ionicons
-              name="location-outline"
-              size={14}
-              color="#8D6E63"
-            />
-
-            <Text style={styles.locationText}>
-
-              {t('location')}
-
-            </Text>
-
-          </View>
-
+          <Text style={styles.subtitle}>
+            Find equipment for your farm
+          </Text>
         </View>
 
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={() => navigation.navigate('Profile')}
+          accessibilityLabel="Open profile and notifications"
+        >
+          <Ionicons
+            name="notifications-outline"
+            size={23}
+            color="#2E7D32"
+          />
+        </TouchableOpacity>
 
-        {/* TOP BUTTONS */}
-
-        <View style={styles.topBtns}>
-
-
-          {/* NOTIFICATION */}
-
-          <TouchableOpacity style={styles.notifBtn}>
-
-            <Ionicons
-              name="notifications-outline"
-              size={24}
-              color="#2E7D32"
-            />
-
-            <View style={styles.notifDot} />
-
-          </TouchableOpacity>
-
-
-          {/* LOGOUT */}
-
-          <TouchableOpacity
-            style={styles.logoutBtn}
-            onPress={async () => {
-
-              await logout();
-
-            }}
-          >
-
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={handleLogout}
+          disabled={loggingOut}
+          accessibilityLabel="Log out"
+        >
+          {loggingOut ? (
+            <ActivityIndicator color="#D32F2F" />
+          ) : (
             <Ionicons
               name="log-out-outline"
-              size={22}
-              color="#E53935"
+              size={23}
+              color="#D32F2F"
             />
-
-          </TouchableOpacity>
-
-
-        </View>
-
+          )}
+        </TouchableOpacity>
       </View>
 
-
-      {/* ================= HERO ================= */}
-
-      <View style={styles.heroBanner}>
-
-        <View style={styles.heroContent}>
-
+      <View style={styles.hero}>
+        <View style={styles.heroText}>
           <Text style={styles.heroTitle}>
-
-            {t('findRightEquipment')}
-
+            {t('findRightEquipment', {
+              defaultValue: 'Find the right equipment',
+            })}
           </Text>
 
-
-          <Text style={styles.heroSub}>
-
-            {t('rentEquipmentSubtitle')}
-
+          <Text style={styles.heroSubtitle}>
+            Choose equipment, check its rate and request
+            a booking.
           </Text>
-
         </View>
 
-
-        <Text style={styles.heroEmoji}>
-          🚜
-        </Text>
-
+        <Text style={styles.heroEmoji}>🚜</Text>
       </View>
 
-
-      {/* ================= SEARCH ================= */}
-
+      {/* Keep the search input outside the list header.
+          It stays mounted when search results change. */}
       <View style={styles.searchBar}>
-
         <Ionicons
           name="search-outline"
-          size={20}
-          color="#8D6E63"
-          style={{ marginLeft: 14 }}
+          size={21}
+          color="#777"
         />
-
 
         <TextInput
-
           style={styles.searchInput}
-
-          placeholder={t('searchEquipment')}
-
-          placeholderTextColor="#999"
-
           value={search}
-
           onChangeText={setSearch}
-
+          placeholder={t('searchEquipment', {
+            defaultValue:
+              'Search equipment, category or location',
+          })}
+          placeholderTextColor="#888"
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
+          accessibilityLabel="Search equipment"
         />
 
-
         {search.length > 0 && (
-
           <TouchableOpacity
             onPress={() => setSearch('')}
+            style={styles.clearButton}
+            accessibilityLabel="Clear search"
           >
-
             <Ionicons
               name="close-circle"
-              size={20}
-              color="#999"
+              size={21}
+              color="#888"
             />
-
           </TouchableOpacity>
-
         )}
-
       </View>
-
-
-      {/* ================= FILTER ================= */}
 
       <FilterBar
         selected={selectedCategory}
         onSelect={setSelectedCategory}
       />
 
-
-      {/* ================= SECTION ================= */}
-
       <View style={styles.sectionRow}>
-
         <Text style={styles.sectionTitle}>
-
-          {t('nearbyEquipment')}
-
+          Available equipment
         </Text>
-
 
         <Text style={styles.countBadge}>
-
-          {t('found', {
-            count: filtered.length,
-          })}
-
+          {filteredEquipment.length} found
         </Text>
-
       </View>
 
-    </View>
+      {error ? (
+        <View style={styles.errorBox}>
+          <Text style={styles.errorText}>
+            {error}
+          </Text>
 
-  );
+          {equipment.length > 0 && (
+            <Text style={styles.errorText}>
+              Showing the last loaded list. Refresh to
+              check current availability.
+            </Text>
+          )}
 
-
-  /* =======================================================
-     EMPTY STATE
-  ======================================================= */
-
-  const ListEmpty = () => (
-
-    <View style={styles.emptyContainer}>
-
-      <Text style={styles.emptyEmoji}>
-        🚜
-      </Text>
-
-
-      <Text style={styles.emptyTitle}>
-
-        {t('noEquipmentFound')}
-
-      </Text>
-
-
-      <Text style={styles.emptySubtitle}>
-
-        {t('tryAnotherCategory')}
-
-      </Text>
-
-    </View>
-
-  );
-
-
-  /* =======================================================
-     MAIN SCREEN
-  ======================================================= */
-
-  return (
-
-    <SafeAreaView style={styles.safe}>
+          <TouchableOpacity
+            onPress={loadEquipment}
+            disabled={loading}
+            style={styles.retryButton}
+          >
+            <Text style={styles.retryText}>
+              Try again
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <FlatList
-
-        data={filtered}
-
-        keyExtractor={(item) =>
-          item.id.toString()
-        }
-
-
+        style={styles.list}
+        data={filteredEquipment}
+        keyExtractor={(item) => String(item.id)}
         renderItem={({ item }) => (
-
           <EquipmentCard
-
             equipment={item}
-
             onPress={() =>
-              navigation.navigate(
-                'EquipmentDetail',
-                {
-                  equipment: item,
-                }
-              )
+              navigation.navigate('EquipmentDetail', {
+                equipment: item,
+              })
             }
-
           />
-
         )}
-
-
-        ListHeaderComponent={ListHeader}
-
-        ListEmptyComponent={ListEmpty}
-
         contentContainerStyle={styles.listContent}
-
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
+        refreshing={loading}
+        onRefresh={loadEquipment}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            {loading ? (
+              <>
+                <ActivityIndicator
+                  size="large"
+                  color="#2E7D32"
+                />
 
+                <Text style={styles.emptySubtitle}>
+                  Loading equipment…
+                </Text>
+              </>
+            ) : error ? (
+              <Text style={styles.emptySubtitle}>
+                Equipment could not be loaded. Tap
+                “Try again” above.
+              </Text>
+            ) : (
+              <>
+                <Text style={styles.emptyEmoji}>
+                  🚜
+                </Text>
 
-        refreshControl={
+                <Text style={styles.emptyTitle}>
+                  {hasFilters
+                    ? 'No matching equipment'
+                    : 'No equipment available'}
+                </Text>
 
-          <RefreshControl
+                <Text style={styles.emptySubtitle}>
+                  {hasFilters
+                    ? 'Try another search or category.'
+                    : 'Pull down to refresh the list.'}
+                </Text>
 
-            refreshing={refreshing}
-
-            onRefresh={onRefresh}
-
-            tintColor="#2E7D32"
-
-          />
-
+                {hasFilters && (
+                  <TouchableOpacity
+                    style={styles.resetButton}
+                    onPress={clearFilters}
+                  >
+                    <Text style={styles.resetText}>
+                      Clear filters
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </View>
         }
-
       />
-
     </SafeAreaView>
-
   );
-
 }
 
-
-/* =========================================================
-   STYLES
-========================================================= */
-
 const styles = StyleSheet.create({
-
   safe: {
     flex: 1,
     backgroundColor: '#F5F5DC',
   },
 
-  listContent: {
-    padding: 16,
-    paddingBottom: 80,
-  },
-
-
-  /* ================= TOP BAR ================= */
-
   topBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 18,
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
+    gap: 8,
   },
 
   greetingBlock: {
@@ -542,239 +411,175 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     color: '#1B1B1B',
-    marginBottom: 4,
   },
 
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-
-  locationText: {
+  subtitle: {
     fontSize: 13,
-    color: '#8D6E63',
-    fontWeight: '500',
+    color: '#666666',
+    marginTop: 4,
   },
 
-
-  /* ================= BUTTONS ================= */
-
-  notifBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#fff',
+  iconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-
-    elevation: 3,
   },
 
-  topBtns: {
+  hero: {
     flexDirection: 'row',
-    gap: 10,
-  },
-
-  logoutBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
     alignItems: 'center',
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-
-    elevation: 3,
-
-    marginLeft: 8,
-  },
-
-  notifDot: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#F44336',
-    borderWidth: 1.5,
-    borderColor: '#fff',
-  },
-
-
-  /* ================= HERO ================= */
-
-  heroBanner: {
     backgroundColor: '#2E7D32',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
-
-    flexDirection: 'row',
-    alignItems: 'center',
-
-    overflow: 'hidden',
-
-    shadowColor: '#2E7D32',
-    shadowOffset: {
-      width: 0,
-      height: 6,
-    },
-
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-
-    elevation: 8,
+    marginHorizontal: 16,
+    marginBottom: 14,
+    padding: 18,
+    borderRadius: 18,
   },
 
-  heroContent: {
+  heroText: {
     flex: 1,
   },
 
   heroTitle: {
     fontSize: 20,
-    fontWeight: '900',
-    color: '#fff',
+    fontWeight: '800',
+    color: '#FFFFFF',
     marginBottom: 6,
-    lineHeight: 26,
   },
 
-  heroSub: {
+  heroSubtitle: {
     fontSize: 13,
-    color: '#A5D6A7',
-    marginBottom: 16,
-    lineHeight: 18,
+    lineHeight: 19,
+    color: '#E8F5E9',
   },
 
   heroEmoji: {
-    fontSize: 56,
-    marginLeft: 8,
+    fontSize: 44,
+    marginLeft: 10,
   },
-
-
-  /* ================= SEARCH ================= */
 
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-
-    backgroundColor: '#fff',
-
-    borderRadius: 14,
-
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-
-    marginBottom: 4,
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-
-    elevation: 3,
+    marginHorizontal: 16,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DDDDDD',
+    borderRadius: 12,
   },
 
   searchInput: {
     flex: 1,
-    paddingVertical: 14,
     paddingHorizontal: 10,
-    fontSize: 15,
+    paddingVertical: 13,
+    fontSize: 14,
     color: '#1B1B1B',
   },
 
-
-  /* ================= SECTION ================= */
+  clearButton: {
+    padding: 6,
+  },
 
   sectionRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-
-    marginBottom: 14,
-    marginTop: 8,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginTop: 4,
+    marginBottom: 12,
   },
 
   sectionTitle: {
+    flex: 1,
     fontSize: 18,
     fontWeight: '800',
     color: '#1B1B1B',
   },
 
   countBadge: {
-    fontSize: 13,
     color: '#2E7D32',
-    fontWeight: '700',
-
     backgroundColor: '#E8F5E9',
-
+    borderRadius: 12,
     paddingHorizontal: 10,
-    paddingVertical: 3,
+    paddingVertical: 5,
+    fontWeight: '700',
+    fontSize: 12,
+  },
 
+  list: {
+    flex: 1,
+  },
+
+  listContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+    flexGrow: 1,
+  },
+
+  errorBox: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 12,
+    backgroundColor: '#FFEBEE',
     borderRadius: 10,
   },
 
+  errorText: {
+    color: '#B71C1C',
+    fontSize: 13,
+    lineHeight: 19,
+  },
 
-  /* ================= EMPTY ================= */
+  retryButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingRight: 12,
+  },
+
+  retryText: {
+    color: '#B71C1C',
+    fontWeight: '700',
+  },
 
   emptyContainer: {
     alignItems: 'center',
-    paddingTop: 48,
-    paddingHorizontal: 24,
+    paddingTop: 30,
+    paddingHorizontal: 20,
   },
 
   emptyEmoji: {
-    fontSize: 56,
-    marginBottom: 16,
+    fontSize: 48,
+    marginBottom: 12,
   },
 
   emptyTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#1B1B1B',
-    marginBottom: 8,
+    fontSize: 19,
+    fontWeight: '700',
+    color: '#333333',
+    textAlign: 'center',
   },
 
   emptySubtitle: {
     fontSize: 14,
-    color: '#666',
+    lineHeight: 21,
+    color: '#666666',
     textAlign: 'center',
-    marginBottom: 24,
+    marginTop: 10,
   },
 
-  clearBtn: {
-    backgroundColor: '#2E7D32',
-    paddingHorizontal: 24,
+  resetButton: {
+    marginTop: 18,
+    paddingHorizontal: 20,
     paddingVertical: 12,
-    borderRadius: 12,
+    backgroundColor: '#2E7D32',
+    borderRadius: 10,
   },
 
-  clearBtnText: {
-    color: '#fff',
+  resetText: {
+    color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 15,
   },
-
 });

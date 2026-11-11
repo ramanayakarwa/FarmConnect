@@ -2,26 +2,6 @@ const pool = require('../config/database');
 
 // ─── IMAGE HELPER ───────────────────────────────────────────────────────────
 
-/**
- * Convert our local upload paths into a fresh URL based on
- * the current backend host.
- *
- * Examples:
- *
- * /uploads/tractor.jpeg
- *
- * becomes:
- *
- * http://192.168.0.104:5000/uploads/tractor.jpeg
- *
- * Old URLs such as:
- *
- * http://192.168.0.107:5000/uploads/tractor.jpeg
- *
- * are also automatically corrected.
- *
- * External URLs such as Unsplash remain unchanged.
- */
 const attachImageUrl = (row, req) => {
   if (!row.image) {
     return row;
@@ -35,7 +15,6 @@ const attachImageUrl = (row, req) => {
   }
 
   const path = uploadsMatch[1];
-
   const baseUrl = `${req.protocol}://${req.get('host')}`;
 
   return {
@@ -46,18 +25,6 @@ const attachImageUrl = (row, req) => {
 
 // ─── GET ALL EQUIPMENT ──────────────────────────────────────────────────────
 
-/**
- * GET /api/equipment
- *
- * Public equipment list.
- *
- * Supports:
- *   category
- *   location
- *   minPrice
- *   maxPrice
- *   availability
- */
 const getEquipment = async (req, res, next) => {
   try {
     const {
@@ -70,7 +37,6 @@ const getEquipment = async (req, res, next) => {
 
     const conditions = [];
     const values = [];
-
     let idx = 1;
 
     // Category filter
@@ -124,10 +90,7 @@ const getEquipment = async (req, res, next) => {
       ORDER BY e.created_at DESC
     `;
 
-    const result = await pool.query(
-      query,
-      values
-    );
+    const result = await pool.query(query, values);
 
     const data = result.rows.map((row) =>
       attachImageUrl(row, req)
@@ -145,9 +108,6 @@ const getEquipment = async (req, res, next) => {
 
 // ─── GET EQUIPMENT BY ID ────────────────────────────────────────────────────
 
-/**
- * GET /api/equipment/:id
- */
 const getEquipmentById = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -190,18 +150,8 @@ const getEquipmentById = async (req, res, next) => {
 
 // ─── CREATE EQUIPMENT ───────────────────────────────────────────────────────
 
-/**
- * POST /api/equipment
- *
- * Provider only.
- *
- * IMPORTANT:
- * owner_id is NEVER accepted from frontend.
- * It always comes from req.user.id.
- */
 const createEquipment = async (req, res, next) => {
   try {
-    // Provider-only protection
     if (req.user.role !== 'provider') {
       return res.status(403).json({
         success: false,
@@ -215,14 +165,13 @@ const createEquipment = async (req, res, next) => {
       description,
       image,
       price,
+      pricing_type,
       location,
       availability = true,
     } = req.body;
 
-    // Always use authenticated provider ID
     const owner_id = req.user.id;
 
-    // Validation
     if (!name || !price) {
       return res.status(400).json({
         success: false,
@@ -242,6 +191,14 @@ const createEquipment = async (req, res, next) => {
       });
     }
 
+    if (!['per_acre', 'per_day'].includes(pricing_type)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'pricing_type must be either per_acre or per_day.',
+      });
+    }
+
     const result = await pool.query(
       `
       INSERT INTO equipment (
@@ -250,11 +207,12 @@ const createEquipment = async (req, res, next) => {
         description,
         image,
         price,
+        pricing_type,
         location,
         availability,
         owner_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
       `,
       [
@@ -263,6 +221,7 @@ const createEquipment = async (req, res, next) => {
         description || null,
         image || null,
         numericPrice,
+        pricing_type,
         location || null,
         availability,
         owner_id,
@@ -285,16 +244,8 @@ const createEquipment = async (req, res, next) => {
 
 // ─── UPDATE EQUIPMENT ───────────────────────────────────────────────────────
 
-/**
- * PUT /api/equipment/:id
- *
- * Provider only.
- *
- * Provider can update ONLY equipment they own.
- */
 const updateEquipment = async (req, res, next) => {
   try {
-    // Provider-only protection
     if (req.user.role !== 'provider') {
       return res.status(403).json({
         success: false,
@@ -303,10 +254,8 @@ const updateEquipment = async (req, res, next) => {
     }
 
     const { id } = req.params;
-
     const userId = req.user.id;
 
-    // Check equipment exists + ownership
     const ownerCheck = await pool.query(
       `
       SELECT owner_id
@@ -337,6 +286,7 @@ const updateEquipment = async (req, res, next) => {
       description,
       image,
       price,
+      pricing_type,
       location,
       availability,
     } = req.body;
@@ -357,6 +307,18 @@ const updateEquipment = async (req, res, next) => {
       }
     }
 
+    // Validate pricing type if supplied
+    if (
+      pricing_type !== undefined &&
+      !['per_acre', 'per_day'].includes(pricing_type)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'pricing_type must be either per_acre or per_day.',
+      });
+    }
+
     const result = await pool.query(
       `
       UPDATE equipment
@@ -366,25 +328,45 @@ const updateEquipment = async (req, res, next) => {
         description = COALESCE($3, description),
         image = COALESCE($4, image),
         price = COALESCE($5, price),
-        location = COALESCE($6, location),
-        availability = COALESCE($7, availability)
-      WHERE id = $8
+        pricing_type = COALESCE($6, pricing_type),
+        location = COALESCE($7, location),
+        availability = COALESCE($8, availability)
+      WHERE id = $9
       RETURNING *
       `,
       [
         name !== undefined
           ? name.trim()
           : null,
-        category,
-        description,
-        image,
+
+        category !== undefined
+          ? category
+          : null,
+
+        description !== undefined
+          ? description
+          : null,
+
+        image !== undefined
+          ? image
+          : null,
+
         price !== undefined
           ? Number(price)
           : null,
-        location,
+
+        pricing_type !== undefined
+          ? pricing_type
+          : null,
+
+        location !== undefined
+          ? location
+          : null,
+
         availability !== undefined
           ? availability
           : null,
+
         id,
       ]
     );
@@ -405,16 +387,8 @@ const updateEquipment = async (req, res, next) => {
 
 // ─── DELETE EQUIPMENT ───────────────────────────────────────────────────────
 
-/**
- * DELETE /api/equipment/:id
- *
- * Provider only.
- *
- * Provider can delete ONLY equipment they own.
- */
 const deleteEquipment = async (req, res, next) => {
   try {
-    // Provider-only protection
     if (req.user.role !== 'provider') {
       return res.status(403).json({
         success: false,
@@ -424,10 +398,8 @@ const deleteEquipment = async (req, res, next) => {
     }
 
     const { id } = req.params;
-
     const userId = req.user.id;
 
-    // Check ownership
     const ownerCheck = await pool.query(
       `
       SELECT owner_id

@@ -1,9 +1,6 @@
 const pool = require('../config/database');
 
-// ============================================================
-// PROVIDER ROLE CHECK
-// ============================================================
-
+// Only providers can access these endpoints.
 const requireProvider = (req, res) => {
   if (req.user.role !== 'provider') {
     res.status(403).json({
@@ -17,153 +14,134 @@ const requireProvider = (req, res) => {
   return true;
 };
 
-// ============================================================
-// DASHBOARD
-// ============================================================
-
+// GET /api/provider/dashboard
 const getDashboard = async (req, res, next) => {
   try {
     if (!requireProvider(req, res)) return;
 
     const providerId = req.user.id;
 
-    // Total equipment owned by provider
-    const eqCount = await pool.query(
+    const equipmentResult = await pool.query(
       `
-      SELECT COUNT(*) AS total
-      FROM equipment
-      WHERE owner_id = $1
+        SELECT COUNT(*) AS total
+        FROM equipment
+        WHERE owner_id = $1
       `,
       [providerId]
     );
 
-    // Pending + accepted bookings
-    const activeBookings = await pool.query(
+    const activeResult = await pool.query(
       `
-      SELECT COUNT(*) AS total
-      FROM bookings b
-      JOIN equipment e
-        ON b.equipment_id = e.id
-      WHERE e.owner_id = $1
-        AND b.status IN ('pending', 'accepted')
+        SELECT COUNT(*) AS total
+        FROM bookings b
+        JOIN equipment e
+          ON b.equipment_id = e.id
+        WHERE e.owner_id = $1
+          AND b.status IN (
+            'pending',
+            'accepted',
+            'on_the_way',
+            'arrived',
+            'work_started'
+          )
       `,
       [providerId]
     );
 
-    // Current month earnings
-    const monthlyEarnings = await pool.query(
+    // Earnings are counted only after work completion
+    // and confirmation that payment was received.
+    // Use the stored booking amount, not today's equipment rate.
+    const earningsResult = await pool.query(
       `
-      SELECT COALESCE(
-        SUM(
-          (b.end_date - b.start_date + 1) * e.price
-        ),
-        0
-      ) AS earnings
+        SELECT
+          COALESCE(
+            SUM(b.total_amount),
+            0
+          ) AS total_earnings,
 
-      FROM bookings b
+          COALESCE(
+            SUM(b.total_amount) FILTER (
+              WHERE DATE_TRUNC(
+                'month',
+                b.paid_at AT TIME ZONE 'Asia/Kolkata'
+              ) = DATE_TRUNC(
+                'month',
+                NOW() AT TIME ZONE 'Asia/Kolkata'
+              )
+            ),
+            0
+          ) AS monthly_earnings
 
-      JOIN equipment e
-        ON b.equipment_id = e.id
+        FROM bookings b
 
-      WHERE e.owner_id = $1
-        AND b.status = 'accepted'
-        AND DATE_TRUNC('month', b.created_at)
-            = DATE_TRUNC('month', NOW())
+        JOIN equipment e
+          ON b.equipment_id = e.id
+
+        WHERE e.owner_id = $1
+          AND b.status = 'completed'
+          AND b.payment_status = 'paid'
       `,
       [providerId]
     );
 
-    // Total earnings
-    const totalEarnings = await pool.query(
-      `
-      SELECT COALESCE(
-        SUM(
-          (b.end_date - b.start_date + 1) * e.price
-        ),
-        0
-      ) AS earnings
-
-      FROM bookings b
-
-      JOIN equipment e
-        ON b.equipment_id = e.id
-
-      WHERE e.owner_id = $1
-        AND b.status = 'accepted'
-      `,
-      [providerId]
-    );
+    const earnings = earningsResult.rows[0];
 
     return res.json({
       success: true,
-
       data: {
-        totalEquipment:
-          parseInt(
-            eqCount.rows[0].total,
-            10
-          ),
-
-        activeBookings:
-          parseInt(
-            activeBookings.rows[0].total,
-            10
-          ),
-
-        monthlyEarnings:
-          parseFloat(
-            monthlyEarnings.rows[0].earnings
-          ),
-
-        totalEarnings:
-          parseFloat(
-            totalEarnings.rows[0].earnings
-          ),
+        totalEquipment: Number(
+          equipmentResult.rows[0].total
+        ),
+        activeBookings: Number(
+          activeResult.rows[0].total
+        ),
+        monthlyEarnings: Number(
+          earnings.monthly_earnings
+        ),
+        totalEarnings: Number(
+          earnings.total_earnings
+        ),
       },
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    next(error);
   }
 };
 
-// ============================================================
-// PROVIDER EQUIPMENT
-// ============================================================
-
-const getProviderEquipment = async (
-  req,
-  res,
-  next
-) => {
+// GET /api/provider/equipment
+const getProviderEquipment = async (req, res, next) => {
   try {
     if (!requireProvider(req, res)) return;
 
-    const providerId = req.user.id;
-
     const result = await pool.query(
       `
-      SELECT
-        e.*,
+        SELECT
+          e.*,
 
-        COUNT(b.id) AS total_bookings,
+          COUNT(b.id) AS total_bookings,
 
-        COUNT(b.id)
-          FILTER (
-            WHERE b.status IN ('pending', 'accepted')
+          COUNT(b.id) FILTER (
+            WHERE b.status IN (
+              'pending',
+              'accepted',
+              'on_the_way',
+              'arrived',
+              'work_started'
+            )
           ) AS active_bookings
 
-      FROM equipment e
+        FROM equipment e
 
-      LEFT JOIN bookings b
-        ON e.id = b.equipment_id
+        LEFT JOIN bookings b
+          ON e.id = b.equipment_id
 
-      WHERE e.owner_id = $1
+        WHERE e.owner_id = $1
 
-      GROUP BY e.id
+        GROUP BY e.id
 
-      ORDER BY e.created_at DESC
+        ORDER BY e.created_at DESC
       `,
-      [providerId]
+      [req.user.id]
     );
 
     return res.json({
@@ -171,28 +149,18 @@ const getProviderEquipment = async (
       count: result.rows.length,
       data: result.rows,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    next(error);
   }
 };
 
-// ============================================================
-// PROVIDER BOOKINGS
-// ============================================================
-
-const getProviderBookings = async (
-  req,
-  res,
-  next
-) => {
+// GET /api/provider/bookings
+const getProviderBookings = async (req, res, next) => {
   try {
     if (!requireProvider(req, res)) return;
 
-    const providerId = req.user.id;
-
     const { status } = req.query;
-
-    const values = [providerId];
+    const values = [req.user.id];
 
     let statusClause = '';
 
@@ -200,6 +168,10 @@ const getProviderBookings = async (
       const allowedStatuses = [
         'pending',
         'accepted',
+        'on_the_way',
+        'arrived',
+        'work_started',
+        'completed',
         'rejected',
         'cancelled',
       ];
@@ -211,38 +183,37 @@ const getProviderBookings = async (
         });
       }
 
-      statusClause = `AND b.status = $2`;
-
+      statusClause = 'AND b.status = $2';
       values.push(status);
     }
 
     const result = await pool.query(
       `
-      SELECT
-        b.*,
+        SELECT
+          b.*,
 
-        e.name AS equipment_name,
-        e.image AS equipment_image,
-        e.price AS equipment_price,
-        e.category AS equipment_category,
-        e.location AS equipment_location,
+          e.name AS equipment_name,
+          e.image AS equipment_image,
+          e.price AS equipment_price,
+          e.category AS equipment_category,
+          e.location AS equipment_location,
 
-        f.name AS farmer_name,
-        f.phone AS farmer_phone,
-        f.email AS farmer_email
+          f.name AS farmer_name,
+          f.phone AS farmer_phone,
+          f.email AS farmer_email
 
-      FROM bookings b
+        FROM bookings b
 
-      JOIN equipment e
-        ON b.equipment_id = e.id
+        JOIN equipment e
+          ON b.equipment_id = e.id
 
-      JOIN users f
-        ON b.farmer_id = f.id
+        JOIN users f
+          ON b.farmer_id = f.id
 
-      WHERE e.owner_id = $1
-        ${statusClause}
+        WHERE e.owner_id = $1
+          ${statusClause}
 
-      ORDER BY b.created_at DESC
+        ORDER BY b.created_at DESC
       `,
       values
     );
@@ -252,8 +223,8 @@ const getProviderBookings = async (
       count: result.rows.length,
       data: result.rows,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    next(error);
   }
 };
 

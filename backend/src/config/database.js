@@ -1,6 +1,12 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// Preserve PostgreSQL DATE values as YYYY-MM-DD strings.
+// Rental dates are calendar dates, not timezone-based timestamps.
+types.setTypeParser(types.builtins.DATE, (value) => value);
 
 require('dotenv').config();
+
+const isProduction = process.env.NODE_ENV === 'production';
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -9,10 +15,12 @@ const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
 
-  // Neon PostgreSQL requires SSL
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  // Neon/Vercel needs SSL, local PostgreSQL does not
+  ...(isProduction && {
+    ssl: {
+      rejectUnauthorized: false,
+    },
+  }),
 });
 
 // Test connection

@@ -1,231 +1,263 @@
 import React, {
   useCallback,
+  useRef,
   useState,
 } from 'react';
 
 import {
   View,
   Text,
-  StyleSheet,
   FlatList,
-  Image,
   TouchableOpacity,
-  Alert,
-  RefreshControl,
+  SafeAreaView,
   Switch,
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { useTranslation } from 'react-i18next';
 
 import providerService from '../../services/providerService';
 import equipmentService from '../../services/equipmentService';
 
+const formatRate = (equipment) => {
+  const price = Number(equipment.price);
+
+  const unit =
+    equipment.pricing_type === 'per_acre'
+      ? 'acre'
+      : equipment.pricing_type === 'per_day'
+        ? 'day'
+        : null;
+
+  if (
+    !Number.isFinite(price) ||
+    price <= 0 ||
+    !unit
+  ) {
+    return 'Price not configured';
+  }
+
+  return `₹${price.toLocaleString('en-IN', {
+    maximumFractionDigits: 2,
+  })} / ${unit}`;
+};
+
 export default function EquipmentManagementScreen({
   navigation,
 }) {
-  const { t } = useTranslation();
+  const [equipment, setEquipment] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [savingId, setSavingId] = useState(null);
+  const [error, setError] = useState('');
 
-  const [myEquipment, setMyEquipment] =
-    useState([]);
+  const focused = useRef(false);
+  const requestVersion = useRef(0);
+  const actionLock = useRef(false);
 
-  const [refreshing, setRefreshing] =
-    useState(false);
+  const loadEquipment = useCallback(async () => {
+    const version = ++requestVersion.current;
 
-  const getCategoryLabel = (category) => {
-    switch (category) {
-      case 'Tractor':
-        return t('tractor');
-
-      case 'Rotavator':
-        return t('rotavator');
-
-      case 'Seed Drill':
-        return t('seedDrill');
-
-      case 'Boom Sprayer':
-        return t('boomSprayer');
-
-      default:
-        return category || t('agriculturalEquipment');
+    if (focused.current) {
+      setLoading(true);
     }
-  };
 
-  const loadEquipment = async () => {
     try {
       const response =
         await providerService.getProviderEquipment();
 
-      console.log(
-        'MY EQUIPMENT RESPONSE:',
-        response
-      );
+      if (
+        !focused.current ||
+        version !== requestVersion.current
+      ) {
+        return;
+      }
 
-      setMyEquipment(response?.data || []);
-    } catch (error) {
-      console.log(
-        'GET PROVIDER EQUIPMENT ERROR:',
-        error?.response?.data ||
-          error?.message ||
-          error
-      );
+      if (!Array.isArray(response?.data)) {
+        throw new Error(
+          'Invalid equipment list received.'
+        );
+      }
 
-      Alert.alert(
-        t('error'),
-        error?.response?.data?.message ||
-          error?.message ||
-          t('unableLoadEquipment')
-      );
+      setEquipment(response.data);
+      setError('');
+    } catch (err) {
+      if (
+        focused.current &&
+        version === requestVersion.current
+      ) {
+        setError(
+          err.response?.data?.message ||
+            err.message ||
+            'Unable to load equipment.'
+        );
+      }
+    } finally {
+      if (
+        focused.current &&
+        version === requestVersion.current
+      ) {
+        setLoading(false);
+      }
     }
-  };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
+      focused.current = true;
       loadEquipment();
-    }, [])
+
+      return () => {
+        focused.current = false;
+        requestVersion.current += 1;
+      };
+    }, [loadEquipment])
   );
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await loadEquipment();
-    setRefreshing(false);
+  const openAddEquipment = () => {
+    if (actionLock.current) return;
+
+    navigation.navigate('AddEquipment', {
+      mode: 'add',
+    });
   };
 
-  const handleDelete = (id, name) => {
-    Alert.alert(
-      t('deleteEquipment'),
-      `${t('deleteConfirmation')} "${name}"?`,
-      [
-        {
-          text: t('cancel'),
-          style: 'cancel',
-        },
-        {
-          text: t('delete'),
-          style: 'destructive',
+  const openEditEquipment = (item) => {
+    if (actionLock.current) return;
 
-          onPress: async () => {
-            try {
-              await equipmentService.deleteEquipment(
-                id
-              );
-
-              setMyEquipment((prev) =>
-                prev.filter(
-                  (item) => item.id !== id
-                )
-              );
-
-              Alert.alert(
-                t('success'),
-                t('equipmentDeletedSuccess')
-              );
-            } catch (error) {
-              console.log(
-                'DELETE EQUIPMENT ERROR:',
-                error?.response?.data ||
-                  error?.message ||
-                  error
-              );
-
-              Alert.alert(
-                t('error'),
-                error?.response?.data?.message ||
-                  error?.message ||
-                  t('couldNotDeleteEquipment')
-              );
-            }
-          },
-        },
-      ]
-    );
+    navigation.navigate('AddEquipment', {
+      mode: 'edit',
+      equipment: item,
+    });
   };
 
-  const toggleAvailability = async (item) => {
-    const currentValue =
-      item.availability === true;
+  const changeAvailability = async (item, value) => {
+    if (
+      actionLock.current ||
+      loading ||
+      !focused.current
+    ) {
+      return;
+    }
+
+    actionLock.current = true;
+
+    // Ignore any earlier list request.
+    requestVersion.current += 1;
+
+    setSavingId(item.id);
+    setError('');
 
     try {
-      setMyEquipment((prev) =>
-        prev.map((equipment) =>
-          equipment.id === item.id
-            ? {
-                ...equipment,
-                availability: !currentValue,
-              }
-            : equipment
-        )
-      );
+      const response =
+        await equipmentService.updateEquipment(
+          item.id,
+          { availability: value }
+        );
 
-      await equipmentService.updateEquipment(
-        item.id,
-        {
-          availability: !currentValue,
-        }
-      );
-    } catch (error) {
-      setMyEquipment((prev) =>
-        prev.map((equipment) =>
-          equipment.id === item.id
-            ? {
-                ...equipment,
-                availability: currentValue,
-              }
-            : equipment
-        )
-      );
+      const updated = response?.data;
 
-      console.log(
-        'UPDATE AVAILABILITY ERROR:',
-        error?.response?.data ||
-          error?.message ||
-          error
-      );
+      if (
+        !updated?.id ||
+        typeof updated.availability !== 'boolean'
+      ) {
+        throw new Error(
+          'The update response was incomplete. Refresh to verify availability.'
+        );
+      }
 
-      Alert.alert(
-        t('error'),
-        error?.response?.data?.message ||
-          error?.message ||
-          t('couldNotUpdateAvailability')
-      );
+      if (focused.current) {
+        // Preserve booking counts while merging the
+        // equipment fields returned by the server.
+        setEquipment((current) =>
+          current.map((row) =>
+            row.id === item.id
+              ? { ...row, ...updated }
+              : row
+          )
+        );
+      }
+    } catch (err) {
+      if (focused.current) {
+        Alert.alert(
+          'Could not confirm availability',
+          err.response?.data?.message ||
+            err.message ||
+            'Refresh and try again.'
+        );
+
+        // The server may have saved a change even if
+        // its response was lost. Fetch the actual value.
+        await loadEquipment();
+      }
+    } finally {
+      actionLock.current = false;
+      setSavingId(null);
     }
   };
 
   const renderEquipment = ({ item }) => {
-    const available =
-      item.availability === true;
+    const available = item.availability === true;
+    const savingThisItem = savingId === item.id;
+    const controlsDisabled =
+      loading || savingId !== null;
 
     return (
       <View style={styles.card}>
-        <Image
-          source={{ uri: item.image }}
-          style={styles.image}
-        />
+        <View style={styles.cardHeading}>
+          <View style={styles.equipmentIcon}>
+            <Ionicons
+              name="construct-outline"
+              size={26}
+              color="#2E7D32"
+            />
+          </View>
 
-        <View style={styles.info}>
-          <Text
-            style={styles.name}
-            numberOfLines={1}
-          >
-            {item.name}
-          </Text>
+          <View style={styles.nameBlock}>
+            <Text style={styles.name}>
+              {item.name}
+            </Text>
 
-          <Text style={styles.category}>
-            {getCategoryLabel(item.category)}
-          </Text>
+            <Text style={styles.category}>
+              {item.category || 'Equipment'}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.rate}>
+          {formatRate(item)}
+        </Text>
+
+        <View style={styles.locationRow}>
+          <Ionicons
+            name="location-outline"
+            size={17}
+            color="#777777"
+          />
 
           <Text style={styles.location}>
-            📍{' '}
-            {item.location ||
-              t('locationNotSpecified')}
+            {item.location || 'Location not provided'}
+          </Text>
+        </View>
+
+        <View style={styles.statistics}>
+          <Text style={styles.statText}>
+            Total bookings: {item.total_bookings ?? 0}
           </Text>
 
-          <Text style={styles.price}>
-            ₹{item.price} / {t('day')}
+          <Text style={styles.statText}>
+            Active bookings: {item.active_bookings ?? 0}
           </Text>
+        </View>
 
-          <View style={styles.availabilityRow}>
+        <View style={styles.availabilityRow}>
+          <View style={styles.availabilityDetails}>
+            <Text style={styles.label}>
+              Available for new bookings
+            </Text>
+
             <Text
               style={[
                 styles.availabilityText,
@@ -236,333 +268,352 @@ export default function EquipmentManagementScreen({
                 },
               ]}
             >
-              {available
-                ? t('available')
-                : t('unavailable')}
+              {available ? 'ON — Available' : 'OFF — Unavailable'}
             </Text>
-
-            <Switch
-              value={available}
-              onValueChange={() =>
-                toggleAvailability(item)
-              }
-              trackColor={{
-                false: '#ddd',
-                true: '#A5D6A7',
-              }}
-              thumbColor={
-                available
-                  ? '#2E7D32'
-                  : '#f4f3f4'
-              }
-            />
           </View>
-        </View>
 
-        <View style={styles.actions}>
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() =>
-              navigation
-                .getParent()
-                ?.navigate('AddEquipment', {
-                  mode: 'edit',
-                  equipment: item,
-                })
-            }
-          >
-            <Ionicons
-              name="create-outline"
-              size={21}
+          {savingThisItem && (
+            <ActivityIndicator
+              size="small"
               color="#2E7D32"
             />
-          </TouchableOpacity>
+          )}
 
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() =>
-              handleDelete(
-                item.id,
-                item.name
-              )
+          <Switch
+            value={available}
+            onValueChange={(value) =>
+              changeAvailability(item, value)
             }
-          >
-            <Ionicons
-              name="trash-outline"
-              size={21}
-              color="#C62828"
-            />
-          </TouchableOpacity>
+            disabled={controlsDisabled}
+            trackColor={{
+              false: '#CCCCCC',
+              true: '#A5D6A7',
+            }}
+            thumbColor={
+              available ? '#2E7D32' : '#F4F4F4'
+            }
+            accessibilityLabel={
+              `Availability for ${item.name}`
+            }
+          />
         </View>
+
+        <Text style={styles.note}>
+          Switching OFF stops new bookings. Existing
+          bookings remain in Booking Requests.
+        </Text>
+
+        <TouchableOpacity
+          style={[
+            styles.editButton,
+            controlsDisabled && styles.disabled,
+          ]}
+          onPress={() => openEditEquipment(item)}
+          disabled={controlsDisabled}
+        >
+          <Ionicons
+            name="create-outline"
+            size={20}
+            color="#2E7D32"
+          />
+
+          <Text style={styles.editText}>
+            Edit Equipment
+          </Text>
+        </TouchableOpacity>
       </View>
     );
   };
 
   return (
-    <View style={styles.container}>
-      {/* HEADER */}
+    <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>
-            {t('myEquipment')}
-          </Text>
+        <Text style={styles.heading}>
+          My Equipment
+        </Text>
 
-          <Text style={styles.headerSubtitle}>
-            {t('manageAgriculturalMachines')}
-          </Text>
-        </View>
+        <Text style={styles.subtitle}>
+          Manage rental rates and availability.
+        </Text>
 
         <TouchableOpacity
-          style={styles.addButton}
-          onPress={() =>
-            navigation
-              .getParent()
-              ?.navigate('AddEquipment', {
-                mode: 'add',
-              })
-          }
+          style={[
+            styles.addButton,
+            savingId !== null && styles.disabled,
+          ]}
+          onPress={openAddEquipment}
+          disabled={savingId !== null}
         >
           <Ionicons
-            name="add"
-            size={28}
-            color="#fff"
+            name="add-circle-outline"
+            size={22}
+            color="#FFFFFF"
           />
+
+          <Text style={styles.addText}>
+            Add Equipment
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* LIST */}
+      {!!error && (
+        <View style={styles.errorBox}>
+          <Text style={styles.errorText}>
+            {error}
+          </Text>
+
+          <TouchableOpacity
+            onPress={loadEquipment}
+            disabled={loading || savingId !== null}
+          >
+            <Text style={styles.retryText}>
+              Refresh Equipment
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <FlatList
-        data={myEquipment}
-        keyExtractor={(item) =>
-          String(item.id)
-        }
+        data={equipment}
+        keyExtractor={(item) => String(item.id)}
         renderItem={renderEquipment}
-        contentContainerStyle={
-          myEquipment.length === 0
-            ? styles.emptyContainer
-            : styles.list
-        }
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-          />
-        }
+        contentContainerStyle={styles.listContent}
+        refreshing={loading}
+        onRefresh={() => {
+          if (!actionLock.current) {
+            loadEquipment();
+          }
+        }}
+        showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Ionicons
-              name="construct-outline"
-              size={60}
-              color="#aaa"
-            />
-
-            <Text style={styles.emptyTitle}>
-              {t('noEquipmentAdded')}
-            </Text>
-
-            <Text style={styles.emptyText}>
-              {t('addEquipmentSoFarmersCan')}
-            </Text>
-
-            <TouchableOpacity
-              style={styles.emptyButton}
-              onPress={() =>
-                navigation
-                  .getParent()
-                  ?.navigate(
-                    'AddEquipment',
-                    {
-                      mode: 'add',
-                    }
-                  )
-              }
-            >
-              <Ionicons
-                name="add"
-                size={20}
-                color="#fff"
+            {loading ? (
+              <ActivityIndicator
+                size="large"
+                color="#2E7D32"
               />
+            ) : (
+              <>
+                <Ionicons
+                  name="construct-outline"
+                  size={48}
+                  color="#2E7D32"
+                />
 
-              <Text
-                style={
-                  styles.emptyButtonText
-                }
-              >
-                {t('addEquipment')}
-              </Text>
-            </TouchableOpacity>
+                <Text style={styles.emptyText}>
+                  {error
+                    ? 'Unable to load your equipment.'
+                    : 'You have not added any equipment yet.'}
+                </Text>
+              </>
+            )}
           </View>
         }
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safe: {
     flex: 1,
-    backgroundColor: '#F7F9F7',
+    backgroundColor: '#F5F5DC',
   },
 
   header: {
-    backgroundColor: '#2E7D32',
-    paddingTop: 55,
-    paddingBottom: 22,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    padding: 16,
   },
 
-  headerTitle: {
-    color: '#fff',
-    fontSize: 24,
+  heading: {
+    fontSize: 25,
     fontWeight: '800',
-  },
-
-  headerSubtitle: {
-    color: '#E8F5E9',
-    fontSize: 13,
-    marginTop: 4,
-  },
-
-  addButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor:
-      'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  list: {
-    padding: 15,
-    paddingBottom: 30,
-  },
-
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 10,
-    marginBottom: 14,
-    flexDirection: 'row',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 5,
-  },
-
-  image: {
-    width: 110,
-    height: 130,
-    borderRadius: 12,
-    backgroundColor: '#eee',
-  },
-
-  info: {
-    flex: 1,
-    paddingLeft: 12,
-    paddingRight: 5,
-  },
-
-  name: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#222',
-  },
-
-  category: {
-    fontSize: 13,
-    color: '#777',
-    marginTop: 3,
-  },
-
-  location: {
-    fontSize: 13,
-    color: '#555',
-    marginTop: 7,
-  },
-
-  price: {
-    fontSize: 15,
     color: '#2E7D32',
-    fontWeight: '800',
+  },
+
+  subtitle: {
+    fontSize: 13,
+    color: '#666666',
     marginTop: 6,
   },
 
-  availabilityRow: {
+  addButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 5,
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2E7D32',
+    borderRadius: 12,
+    paddingVertical: 14,
+    marginTop: 16,
   },
 
-  availabilityText: {
-    fontSize: 12,
-    fontWeight: '800',
+  addText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
 
-  actions: {
-    justifyContent: 'space-between',
-    paddingVertical: 3,
+  listContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
   },
 
-  editButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
+  card: {
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+
+  cardHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+
+  equipmentIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 12,
     backgroundColor: '#E8F5E9',
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  deleteButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#FFEBEE',
-    alignItems: 'center',
-    justifyContent: 'center',
+  nameBlock: {
+    flex: 1,
   },
 
-  emptyContainer: {
-    flexGrow: 1,
+  name: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#222222',
+  },
+
+  category: {
+    fontSize: 13,
+    color: '#8D6E63',
+    marginTop: 4,
+  },
+
+  rate: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#2E7D32',
+    marginBottom: 10,
+  },
+
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+
+  location: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#666666',
+  },
+
+  statistics: {
+    marginVertical: 12,
+    padding: 12,
+    backgroundColor: '#FAFAFA',
+    borderRadius: 10,
+  },
+
+  statText: {
+    fontSize: 13,
+    lineHeight: 22,
+    color: '#666666',
+  },
+
+  availabilityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#EEEEEE',
+    paddingTop: 12,
+  },
+
+  availabilityDetails: {
+    flex: 1,
+  },
+
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333333',
+  },
+
+  availabilityText: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 5,
+  },
+
+  note: {
+    fontSize: 12,
+    lineHeight: 19,
+    color: '#777777',
+    marginTop: 9,
+  },
+
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#2E7D32',
+    borderRadius: 10,
+    marginTop: 14,
+  },
+
+  editText: {
+    color: '#2E7D32',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  disabled: {
+    opacity: 0.5,
+  },
+
+  errorBox: {
+    marginHorizontal: 16,
+    marginBottom: 14,
+    padding: 12,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 10,
+  },
+
+  errorText: {
+    color: '#B71C1C',
+    fontSize: 13,
+  },
+
+  retryText: {
+    color: '#B71C1C',
+    fontWeight: '700',
+    marginTop: 10,
   },
 
   empty: {
-    flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 35,
-  },
-
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    marginTop: 15,
+    paddingVertical: 45,
+    paddingHorizontal: 20,
   },
 
   emptyText: {
-    color: '#777',
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#666666',
     textAlign: 'center',
-    lineHeight: 20,
-    marginTop: 8,
-  },
-
-  emptyButton: {
-    marginTop: 20,
-    backgroundColor: '#2E7D32',
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-  },
-
-  emptyButtonText: {
-    color: '#fff',
-    fontWeight: '800',
+    marginTop: 14,
   },
 });

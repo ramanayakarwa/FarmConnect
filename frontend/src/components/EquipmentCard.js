@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+
 import {
   View,
   Text,
@@ -10,164 +11,245 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 
-export const EquipmentCard = ({ equipment, onPress }) => {
+const LOCAL_IMAGES = {
+  Tractor: require('../../assets/tractor.jpeg'),
+  Rotavator: require('../../assets/rotavator.jpeg'),
+  'Seed Drill': require('../../assets/seed_drill.jpeg'),
+  'Boom Sprayer': require('../../assets/boom_sprayer.jpeg'),
+};
+
+export const EquipmentCard = ({
+  equipment,
+  onPress,
+}) => {
   const { t } = useTranslation();
+  const [imageFailed, setImageFailed] = useState(false);
+
+  const imageUrl =
+    typeof equipment?.image === 'string'
+      ? equipment.image.trim()
+      : '';
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [equipment?.id, imageUrl]);
 
   if (!equipment) return null;
 
-  const getLocalImage = () => {
-    switch (equipment.category) {
-      case 'Tractor':
-        return require('../../assets/tractor.jpeg');
+  const available = equipment.availability === true;
 
-      case 'Rotavator':
-        return require('../../assets/rotavator.jpeg');
+  const pricingType = equipment.pricing_type;
 
-      case 'Seed Drill':
-        return require('../../assets/seed_drill.jpeg');
+  const validPricingType =
+    pricingType === 'per_acre' ||
+    pricingType === 'per_day';
 
-      case 'Boom Sprayer':
-        return require('../../assets/boom_sprayer.jpeg');
+  const price = Number(equipment.price);
 
-      default:
-        return require('../../assets/tractor.jpeg');
-    }
+  const validPrice =
+    Number.isFinite(price) && price > 0;
+
+  const canOpen =
+    available && validPricingType && validPrice;
+
+  const categoryLabels = {
+    Tractor: t('tractor', {
+      defaultValue: 'Tractor',
+    }),
+    Rotavator: t('rotavator', {
+      defaultValue: 'Rotavator',
+    }),
+    'Seed Drill': t('seedDrill', {
+      defaultValue: 'Seed Drill',
+    }),
+    'Boom Sprayer': t('boomSprayer', {
+      defaultValue: 'Boom Sprayer',
+    }),
   };
 
-  const getCategoryLabel = (category) => {
-    switch (category) {
-      case 'Tractor':
-        return t('tractor');
+  const categoryLabel =
+    categoryLabels[equipment.category] ||
+    equipment.category ||
+    'Equipment';
 
-      case 'Rotavator':
-        return t('rotavator');
+  const unitLabel =
+    pricingType === 'per_acre'
+      ? 'acre'
+      : pricingType === 'per_day'
+        ? 'day'
+        : '';
 
-      case 'Seed Drill':
-        return t('seedDrill');
+  const formattedPrice = validPrice
+    ? price.toLocaleString('en-IN', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      })
+    : '';
 
-      case 'Boom Sprayer':
-        return t('boomSprayer');
+  // Prefer the equipment's own image when a full URL
+  // is available. Fall back to its category image.
+  const remoteImage =
+    /^https?:\/\//i.test(imageUrl) && !imageFailed;
 
-      case 'All':
-        return t('all');
-
-      default:
-        return category;
-    }
-  };
+  const imageSource = remoteImage
+    ? { uri: imageUrl }
+    : LOCAL_IMAGES[equipment.category];
 
   return (
     <TouchableOpacity
-      style={styles.card}
+      style={[
+        styles.card,
+        !available && styles.unavailableCard,
+      ]}
       onPress={onPress}
-      activeOpacity={0.92}
+      disabled={!canOpen}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !canOpen }}
+      accessibilityLabel={
+        `${equipment.name}. ` +
+        (validPrice && validPricingType
+          ? `₹${formattedPrice} per ${unitLabel}. `
+          : 'Price unavailable. ') +
+        (available ? 'Available.' : 'Not available.')
+      }
     >
-      <Image
-        source={getLocalImage()}
-        style={styles.image}
-        resizeMode="cover"
-      />
+      <View style={styles.imageContainer}>
+        {imageSource ? (
+          <Image
+            source={imageSource}
+            style={styles.image}
+            resizeMode="cover"
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <View style={styles.imagePlaceholder}>
+            <Ionicons
+              name="construct-outline"
+              size={48}
+              color="#2E7D32"
+            />
 
-      {/* Availability Badge */}
-      <View style={styles.availBadge}>
+            <Text style={styles.placeholderText}>
+              {categoryLabel}
+            </Text>
+          </View>
+        )}
+
         <View
           style={[
-            styles.availDot,
-            {
-              backgroundColor: equipment.availability
-                ? '#4CAF50'
-                : '#F44336',
-            },
-          ]}
-        />
-
-        <Text
-          style={[
-            styles.availText,
-            {
-              color: equipment.availability
-                ? '#4CAF50'
-                : '#F44336',
-            },
+            styles.availabilityBadge,
+            available
+              ? styles.availableBadge
+              : styles.unavailableBadge,
           ]}
         >
-          {equipment.availability
-            ? t('available')
-            : t('booked')}
-        </Text>
+          <Ionicons
+            name={
+              available
+                ? 'checkmark-circle'
+                : 'close-circle'
+            }
+            size={15}
+            color={available ? '#2E7D32' : '#C62828'}
+          />
+
+          <Text
+            style={[
+              styles.availabilityText,
+              {
+                color: available
+                  ? '#2E7D32'
+                  : '#C62828',
+              },
+            ]}
+          >
+            {available ? 'Available' : 'Not Available'}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.body}>
-        {/* Name + Rating */}
-        <View style={styles.row}>
-          <Text style={styles.name}>
-            {equipment.name}
-          </Text>
+        <Text style={styles.category}>
+          {categoryLabel}
+        </Text>
 
-          <View style={styles.ratingBadge}>
-            <Ionicons
-              name="star"
-              size={12}
-              color="#FFC107"
-            />
+        <Text style={styles.name}>
+          {equipment.name}
+        </Text>
 
-            <Text style={styles.ratingText}>
-              {equipment.rating}
-            </Text>
-          </View>
-        </View>
-
-        {/* Category */}
-        <View style={styles.categoryRow}>
-          <View style={styles.categoryBadge}>
-            <Text style={styles.categoryText}>
-              {getCategoryLabel(equipment.category)}
-            </Text>
-          </View>
-        </View>
-
-        {/* Location + Distance */}
         <View style={styles.infoRow}>
           <Ionicons
             name="location-outline"
-            size={14}
-            color="#8D6E63"
+            size={16}
+            color="#777777"
           />
 
-          <Text style={styles.location}>
-            {equipment.location}
-          </Text>
-
-          <Text style={styles.distance}>
-            {equipment.distance}
+          <Text style={styles.infoText}>
+            {equipment.location || 'Location not provided'}
           </Text>
         </View>
 
-        {/* Price + Details */}
-        <View style={styles.footer}>
-          <Text style={styles.price}>
-            ₹{equipment.price}
-            <Text style={styles.perDay}>
-              /{t('day')}
-            </Text>
-          </Text>
-
-          <TouchableOpacity
-            style={styles.btn}
-            onPress={onPress}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.btnText}>
-              {t('viewDetails')}
-            </Text>
-
+        {!!equipment.owner_name && (
+          <View style={styles.infoRow}>
             <Ionicons
-              name="arrow-forward"
-              size={14}
-              color="#fff"
-              style={styles.btnIcon}
+              name="person-outline"
+              size={16}
+              color="#777777"
             />
-          </TouchableOpacity>
+
+            <Text style={styles.infoText}>
+              {equipment.owner_name}
+            </Text>
+          </View>
+        )}
+
+        <View style={styles.footer}>
+          <View style={styles.priceBlock}>
+            {validPrice && validPricingType ? (
+              <>
+                <Text style={styles.price}>
+                  ₹{formattedPrice}
+                  <Text style={styles.priceUnit}>
+                    {' '}/ {unitLabel}
+                  </Text>
+                </Text>
+
+                <Text style={styles.pricingHint}>
+                  {pricingType === 'per_acre'
+                    ? 'Charged by acreage'
+                    : 'Charged by booking days'}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.invalidPrice}>
+                Price not configured
+              </Text>
+            )}
+          </View>
+
+          <View
+            style={[
+              styles.detailsButton,
+              !canOpen && styles.disabledButton,
+            ]}
+          >
+            <Text style={styles.detailsText}>
+              {!available
+                ? 'Unavailable'
+                : canOpen
+                  ? 'View Details'
+                  : 'Unavailable'}
+            </Text>
+
+            {canOpen && (
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color="#FFFFFF"
+              />
+            )}
+          </View>
         </View>
       </View>
     </TouchableOpacity>
@@ -176,165 +258,158 @@ export const EquipmentCard = ({ equipment, onPress }) => {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     marginBottom: 16,
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 6,
-
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+  },
+
+  unavailableCard: {
+    opacity: 0.65,
+  },
+
+  imageContainer: {
+    height: 175,
+    backgroundColor: '#E8F5E9',
   },
 
   image: {
     width: '100%',
-    height: 160,
+    height: '100%',
   },
 
-  availBadge: {
+  imagePlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+
+  placeholderText: {
+    marginTop: 10,
+    color: '#2E7D32',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  availabilityBadge: {
     position: 'absolute',
     top: 12,
     right: 12,
-    backgroundColor: '#fff',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
 
-  availDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 4,
+  availableBadge: {
+    backgroundColor: '#E8F5E9',
   },
 
-  availText: {
-    fontSize: 11,
+  unavailableBadge: {
+    backgroundColor: '#FFEBEE',
+  },
+
+  availabilityText: {
+    fontSize: 12,
     fontWeight: '700',
   },
 
   body: {
-    padding: 14,
+    padding: 16,
   },
 
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
+  category: {
+    color: '#8D6E63',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 5,
   },
 
   name: {
-    fontSize: 17,
-    fontWeight: '700',
     color: '#1B1B1B',
-    flex: 1,
-  },
-
-  ratingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF8E1',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-
-  ratingText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#F59E0B',
-    marginLeft: 3,
-  },
-
-  categoryRow: {
-    marginBottom: 8,
-  },
-
-  categoryBadge: {
-    backgroundColor: '#E8F5E9',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
-  },
-
-  categoryText: {
-    color: '#2E7D32',
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 10,
   },
 
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    gap: 6,
+    marginBottom: 6,
   },
 
-  location: {
-    fontSize: 13,
-    color: '#8D6E63',
-    marginLeft: 4,
+  infoText: {
     flex: 1,
-  },
-
-  distance: {
+    color: '#666666',
     fontSize: 13,
-    color: '#999',
-    fontStyle: 'italic',
+    lineHeight: 19,
   },
 
   footer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#EEEEEE',
+    paddingTop: 12,
+    marginTop: 8,
+  },
+
+  priceBlock: {
+    flexShrink: 1,
   },
 
   price: {
-    fontSize: 22,
+    fontSize: 21,
     fontWeight: '800',
     color: '#2E7D32',
   },
 
-  perDay: {
+  priceUnit: {
     fontSize: 13,
-    fontWeight: '400',
-    color: '#666',
+    fontWeight: '500',
+    color: '#666666',
   },
 
-  btn: {
-    backgroundColor: '#2E7D32',
+  pricingHint: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#777777',
+  },
+
+  invalidPrice: {
+    fontSize: 13,
+    color: '#C62828',
+    fontWeight: '600',
+  },
+
+  detailsButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
     borderRadius: 10,
+    backgroundColor: '#2E7D32',
   },
 
-  btnText: {
-    color: '#fff',
-    fontSize: 13,
+  disabledButton: {
+    backgroundColor: '#888888',
+  },
+
+  detailsText: {
+    color: '#FFFFFF',
+    fontSize: 12,
     fontWeight: '700',
-  },
-
-  btnIcon: {
-    marginLeft: 6,
   },
 });

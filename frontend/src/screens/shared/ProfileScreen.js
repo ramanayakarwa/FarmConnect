@@ -1,153 +1,148 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+
 import {
   View,
   Text,
-  StyleSheet,
   TextInput,
   TouchableOpacity,
-  Alert,
-  ActivityIndicator,
   ScrollView,
+  SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useAuth } from '../../context/AuthContext';
 
-export default function ProfileScreen({ navigation }) {
+import { useAuth } from '../../context/AuthContext';
+import NotificationInbox from '../../components/NotificationInbox';
+
+export default function ProfileScreen() {
   const { t } = useTranslation();
   const { user, updateUser, logout } = useAuth();
 
   const [isEditing, setIsEditing] = useState(false);
-
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   const [phone, setPhone] = useState(user?.phone || '');
 
   const [saving, setSaving] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
-  // Check whether logged-in user is Provider or Farmer
+  const actionLock = useRef(false);
+
   const isProvider = user?.role === 'provider';
+  const busy = saving || loggingOut;
 
-  const handleEdit = () => {
+  const resetFields = () => {
     setName(user?.name || '');
     setEmail(user?.email || '');
     setPhone(user?.phone || '');
+  };
 
+  const handleEdit = () => {
+    if (actionLock.current) return;
+
+    resetFields();
     setIsEditing(true);
   };
 
   const handleCancel = () => {
-    setName(user?.name || '');
-    setEmail(user?.email || '');
-    setPhone(user?.phone || '');
+    if (actionLock.current) return;
 
+    resetFields();
     setIsEditing(false);
   };
 
   const handleSave = async () => {
+    if (actionLock.current) return;
+
     const cleanName = name.trim();
     const cleanEmail = email.trim().toLowerCase();
     const cleanPhone = phone.trim();
 
-    if (!cleanName) {
+    if (!cleanName || !cleanEmail || !cleanPhone) {
       Alert.alert(
-        t('error'),
-        t('nameCannotBeEmpty')
+        'Missing details',
+        'Enter your name, email and phone number.'
       );
       return;
     }
 
-    if (!cleanEmail) {
+    if (
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)
+    ) {
       Alert.alert(
-        t('error'),
-        t('emailCannotBeEmpty')
+        'Invalid email',
+        'Enter a valid email address.'
       );
       return;
     }
 
-    if (!cleanPhone) {
-      Alert.alert(
-        t('error'),
-        t('phoneCannotBeEmpty')
-      );
-      return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!emailRegex.test(cleanEmail)) {
-      Alert.alert(
-        t('error'),
-        t('invalidEmail')
-      );
-      return;
-    }
+    actionLock.current = true;
+    setSaving(true);
 
     try {
-      setSaving(true);
-
-      const updatedUser = await updateUser({
+      await updateUser({
         name: cleanName,
         email: cleanEmail,
         phone: cleanPhone,
       });
 
-      setName(updatedUser?.name || cleanName);
-      setEmail(updatedUser?.email || cleanEmail);
-      setPhone(updatedUser?.phone || cleanPhone);
-
       setIsEditing(false);
 
       Alert.alert(
-        t('success'),
-        t('profileUpdatedSuccessfully')
+        'Success',
+        'Your profile has been updated.'
       );
     } catch (error) {
-      console.log(
-        'PROFILE UPDATE ERROR:',
-        error?.response?.data ||
-          error?.message ||
-          error
-      );
-
       Alert.alert(
-        t('error'),
-        error?.response?.data?.message ||
-          error?.message ||
-          t('couldNotUpdateProfile')
+        'Unable to save',
+        error.response?.data?.message ||
+          error.message ||
+          'Please try again.'
       );
     } finally {
+      actionLock.current = false;
       setSaving(false);
     }
   };
 
   const handleLogout = () => {
+    if (actionLock.current) return;
+
     Alert.alert(
-      t('logout'),
-      t('logoutConfirmation'),
+      'Log out',
+      isEditing
+        ? 'Log out and discard your unsaved profile changes?'
+        : 'Are you sure you want to log out?',
       [
         {
-          text: t('cancel'),
+          text: 'Cancel',
           style: 'cancel',
         },
         {
-          text: t('logout'),
+          text: 'Log out',
           style: 'destructive',
-
           onPress: async () => {
+            if (actionLock.current) return;
+
+            actionLock.current = true;
+            setLoggingOut(true);
+
             try {
               await logout();
             } catch (error) {
-              console.log(
-                'LOGOUT ERROR:',
-                error?.message || error
-              );
-
               Alert.alert(
-                t('error'),
-                t('couldNotLogout')
+                'Unable to log out',
+                error.message || 'Please try again.'
               );
+            } finally {
+              actionLock.current = false;
+              setLoggingOut(false);
             }
           },
         },
@@ -156,205 +151,232 @@ export default function ProfileScreen({ navigation }) {
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
-
-      {/* HEADER */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>
-          {t('profile')}
-        </Text>
-
-        <Text style={styles.headerSubtitle}>
-          {t('manageAccount')}
-        </Text>
-      </View>
-
-      {/* PROFILE ICON */}
-      <View style={styles.avatarContainer}>
-        <View style={styles.avatar}>
-          <Ionicons
-            name={isProvider ? 'construct' : 'person'}
-            size={55}
-            color="#2E7D32"
-          />
-        </View>
-
-        <Text style={styles.userName}>
-          {user?.name || t('user')}
-        </Text>
-
-        <Text style={styles.userRole}>
-          {isProvider
-            ? t('equipmentProvider')
-            : t('farmer')}
-        </Text>
-      </View>
-
-      {/* PROFILE CARD */}
-      <View style={styles.card}>
-
-        {/* NAME */}
-        <View style={styles.fieldContainer}>
-          <Text style={styles.label}>
-            {t('name')}
-          </Text>
-
-          {isEditing ? (
-            <TextInput
-              style={styles.input}
-              value={name}
-              onChangeText={setName}
-              placeholder={t('enterYourName')}
-              autoCapitalize="words"
-            />
-          ) : (
-            <Text style={styles.value}>
-              {user?.name || '-'}
-            </Text>
-          )}
-        </View>
-
-        {/* EMAIL */}
-        <View style={styles.fieldContainer}>
-          <Text style={styles.label}>
-            {t('email')}
-          </Text>
-
-          {isEditing ? (
-            <TextInput
-              style={styles.input}
-              value={email}
-              onChangeText={setEmail}
-              placeholder={t('enterYourEmail')}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          ) : (
-            <Text style={styles.value}>
-              {user?.email || '-'}
-            </Text>
-          )}
-        </View>
-
-        {/* PHONE */}
-        <View style={styles.fieldContainer}>
-          <Text style={styles.label}>
-            {t('phone')}
-          </Text>
-
-          {isEditing ? (
-            <TextInput
-              style={styles.input}
-              value={phone}
-              onChangeText={setPhone}
-              placeholder={t('enterYourPhone')}
-              keyboardType="phone-pad"
-            />
-          ) : (
-            <Text style={styles.value}>
-              {user?.phone || '-'}
-            </Text>
-          )}
-        </View>
-
-        {/* ROLE */}
-        <View style={styles.fieldContainer}>
-          <Text style={styles.label}>
-            {t('role')}
-          </Text>
-
-          <Text style={styles.value}>
-            {isProvider
-              ? t('provider')
-              : t('farmer')}
-          </Text>
-        </View>
-
-      </View>
-
-      {/* EDIT / SAVE / CANCEL */}
-      {!isEditing ? (
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={handleEdit}
+    <SafeAreaView style={styles.safe}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={
+          Platform.OS === 'ios' ? 'padding' : 'height'
+        }
+      >
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
         >
-          <Ionicons
-            name="create-outline"
-            size={20}
-            color="#FFFFFF"
-          />
-
-          <Text style={styles.primaryButtonText}>
-            {t('editProfile')}
-          </Text>
-        </TouchableOpacity>
-      ) : (
-        <View style={styles.buttonRow}>
-
-          <TouchableOpacity
-            style={styles.cancelButton}
-            onPress={handleCancel}
-            disabled={saving}
-          >
-            <Text style={styles.cancelButtonText}>
-              {t('cancel')}
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>
+              {t('profile', {
+                defaultValue: 'Profile',
+              })}
             </Text>
-          </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.saveButton}
-            onPress={handleSave}
-            disabled={saving}
-          >
-            {saving ? (
-              <ActivityIndicator color="#FFFFFF" />
+            <Text style={styles.headerSubtitle}>
+              Manage your account and notifications
+            </Text>
+          </View>
+
+          <View style={styles.identity}>
+            <View style={styles.avatar}>
+              <Ionicons
+                name={isProvider ? 'construct' : 'person'}
+                size={42}
+                color="#2E7D32"
+              />
+            </View>
+
+            <Text style={styles.userName}>
+              {user?.name || 'User'}
+            </Text>
+
+            <Text style={styles.userRole}>
+              {isProvider
+                ? t('equipmentProvider', {
+                    defaultValue: 'Equipment Provider',
+                  })
+                : t('farmer', {
+                    defaultValue: 'Farmer',
+                  })}
+            </Text>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>
+              Account Details
+            </Text>
+
+            <Text style={styles.label}>
+              {t('name', { defaultValue: 'Name' })}
+            </Text>
+
+            {isEditing ? (
+              <TextInput
+                style={styles.input}
+                value={name}
+                onChangeText={setName}
+                placeholder="Enter your name"
+                placeholderTextColor="#888888"
+                autoCapitalize="words"
+                maxLength={100}
+                editable={!busy}
+              />
             ) : (
-              <>
+              <Text style={styles.value}>
+                {user?.name || 'Not provided'}
+              </Text>
+            )}
+
+            <Text style={styles.label}>
+              {t('email', { defaultValue: 'Email' })}
+            </Text>
+
+            {isEditing ? (
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                placeholder="Enter your email"
+                placeholderTextColor="#888888"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                maxLength={100}
+                editable={!busy}
+              />
+            ) : (
+              <Text style={styles.value}>
+                {user?.email || 'Not provided'}
+              </Text>
+            )}
+
+            <Text style={styles.label}>
+              {t('phone', {
+                defaultValue: 'Phone number',
+              })}
+            </Text>
+
+            {isEditing ? (
+              <TextInput
+                style={styles.input}
+                value={phone}
+                onChangeText={setPhone}
+                placeholder="Enter your phone number"
+                placeholderTextColor="#888888"
+                keyboardType="phone-pad"
+                maxLength={15}
+                editable={!busy}
+              />
+            ) : (
+              <Text style={styles.value}>
+                {user?.phone || 'Not provided'}
+              </Text>
+            )}
+
+            <Text style={styles.label}>
+              {t('role', {
+                defaultValue: 'Account type',
+              })}
+            </Text>
+
+            <Text style={styles.value}>
+              {isProvider ? 'Equipment Provider' : 'Farmer'}
+            </Text>
+
+            {!isEditing ? (
+              <TouchableOpacity
+                style={[
+                  styles.primaryButton,
+                  busy && styles.disabled,
+                ]}
+                onPress={handleEdit}
+                disabled={busy}
+              >
                 <Ionicons
-                  name="checkmark"
+                  name="create-outline"
                   size={20}
                   color="#FFFFFF"
                 />
 
-                <Text style={styles.saveButtonText}>
-                  {t('save')}
+                <Text style={styles.primaryText}>
+                  Edit Profile
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.buttonRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.cancelButton,
+                    busy && styles.disabled,
+                  ]}
+                  onPress={handleCancel}
+                  disabled={busy}
+                >
+                  <Text style={styles.cancelText}>
+                    Cancel
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.saveButton,
+                    busy && styles.disabled,
+                  ]}
+                  onPress={handleSave}
+                  disabled={busy}
+                >
+                  {saving ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.primaryText}>
+                      Save Changes
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {/* Shared notification inbox for both roles. */}
+          <NotificationInbox />
+
+          <TouchableOpacity
+            style={[
+              styles.logoutButton,
+              busy && styles.disabled,
+            ]}
+            onPress={handleLogout}
+            disabled={busy}
+          >
+            {loggingOut ? (
+              <ActivityIndicator color="#C62828" />
+            ) : (
+              <>
+                <Ionicons
+                  name="log-out-outline"
+                  size={22}
+                  color="#C62828"
+                />
+
+                <Text style={styles.logoutText}>
+                  Log Out
                 </Text>
               </>
             )}
           </TouchableOpacity>
-
-        </View>
-      )}
-
-      {/* LOGOUT */}
-      <TouchableOpacity
-        style={styles.logoutButton}
-        onPress={handleLogout}
-      >
-        <Ionicons
-          name="log-out-outline"
-          size={22}
-          color="#D32F2F"
-        />
-
-        <Text style={styles.logoutText}>
-          {t('logout')}
-        </Text>
-      </TouchableOpacity>
-
-    </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  flex: {
     flex: 1,
-    backgroundColor: '#F5F7F5',
+  },
+
+  safe: {
+    flex: 1,
+    backgroundColor: '#F5F5DC',
   },
 
   content: {
@@ -363,176 +385,165 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#2E7D32',
-    paddingTop: 55,
-    paddingBottom: 25,
     paddingHorizontal: 20,
+    paddingVertical: 24,
   },
 
   headerTitle: {
-    fontSize: 28,
-    fontWeight: '700',
+    fontSize: 27,
+    fontWeight: '800',
     color: '#FFFFFF',
   },
 
   headerSubtitle: {
     fontSize: 14,
+    lineHeight: 20,
     color: '#E8F5E9',
-    marginTop: 5,
+    marginTop: 6,
   },
 
-  avatarContainer: {
+  identity: {
     alignItems: 'center',
-    marginTop: -35,
+    paddingTop: 22,
+    paddingHorizontal: 16,
   },
 
   avatar: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
+    width: 82,
+    height: 82,
+    borderRadius: 41,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 5,
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    borderWidth: 2,
+    borderColor: '#C8E6C9',
   },
 
   userName: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#212121',
-    marginTop: 10,
+    fontSize: 23,
+    fontWeight: '800',
+    color: '#222222',
+    textAlign: 'center',
+    marginTop: 12,
   },
 
   userRole: {
     fontSize: 14,
-    color: '#757575',
-    marginTop: 3,
+    color: '#777777',
+    marginTop: 5,
   },
 
   card: {
-    backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
-    marginTop: 25,
-    borderRadius: 14,
+    marginTop: 20,
     padding: 18,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
   },
 
-  fieldContainer: {
-    marginBottom: 18,
+  sectionTitle: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#2E7D32',
+    marginBottom: 8,
   },
 
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#757575',
-    marginBottom: 7,
+    color: '#777777',
+    marginTop: 14,
+    marginBottom: 6,
   },
 
   value: {
     fontSize: 16,
-    color: '#212121',
+    lineHeight: 23,
+    color: '#333333',
   },
 
   input: {
     borderWidth: 1,
-    borderColor: '#D0D0D0',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 16,
-    color: '#212121',
+    borderColor: '#CCCCCC',
+    borderRadius: 9,
     backgroundColor: '#FAFAFA',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#222222',
   },
 
   primaryButton: {
-    marginHorizontal: 16,
-    marginTop: 20,
-    height: 50,
-    borderRadius: 10,
-    backgroundColor: '#2E7D32',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
     gap: 8,
+    minHeight: 50,
+    borderRadius: 10,
+    backgroundColor: '#2E7D32',
+    marginTop: 22,
   },
 
-  primaryButtonText: {
+  primaryText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
+    textAlign: 'center',
   },
 
   buttonRow: {
     flexDirection: 'row',
-    marginHorizontal: 16,
-    marginTop: 20,
     gap: 10,
+    marginTop: 22,
   },
 
   cancelButton: {
     flex: 1,
-    height: 50,
-    borderRadius: 10,
+    minHeight: 50,
     borderWidth: 1,
-    borderColor: '#BDBDBD',
+    borderColor: '#BBBBBB',
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  cancelButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#616161',
+  cancelText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#666666',
   },
 
   saveButton: {
     flex: 1,
-    height: 50,
-    borderRadius: 10,
+    minHeight: 50,
+    paddingHorizontal: 8,
     backgroundColor: '#2E7D32',
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 7,
-  },
-
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
   },
 
   logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     marginHorizontal: 16,
-    marginTop: 25,
-    height: 50,
-    borderRadius: 10,
+    marginTop: 22,
+    minHeight: 52,
     borderWidth: 1,
     borderColor: '#EF9A9A',
     backgroundColor: '#FFEBEE',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
+    borderRadius: 10,
   },
 
   logoutText: {
-    color: '#D32F2F',
     fontSize: 16,
     fontWeight: '700',
+    color: '#C62828',
+  },
+
+  disabled: {
+    opacity: 0.5,
   },
 });

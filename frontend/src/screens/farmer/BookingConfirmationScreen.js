@@ -1,260 +1,347 @@
 import React from 'react';
+
 import {
   View,
   Text,
-  StyleSheet,
-  SafeAreaView,
   ScrollView,
   TouchableOpacity,
-  Alert,
+  SafeAreaView,
+  StyleSheet,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
-import { useTranslation } from 'react-i18next';
-import { formatDate } from '../../utils/helpers';
+
+const STATUS_LABELS = {
+  pending: 'Waiting for provider approval',
+  accepted: 'Accepted',
+  on_the_way: 'On the Way',
+  arrived: 'Arrived',
+  work_started: 'Work Started',
+  completed: 'Work Completed',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+};
+
+const PAYMENT_METHOD_LABELS = {
+  cash: 'Cash',
+  upi: 'UPI',
+  bank_transfer: 'Bank Transfer',
+  card: 'Card',
+};
+
+const formatDate = (value) => {
+  if (!value) return 'Not available';
+
+  // PostgreSQL DATE responses may include a time portion.
+  const datePart = String(value).slice(0, 10);
+  const parts = datePart.split('-');
+
+  if (parts.length !== 3) return datePart;
+
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
+};
+
+const DetailRow = ({ label, value }) => (
+  <View style={styles.detailRow}>
+    <Text style={styles.detailLabel}>
+      {label}
+    </Text>
+
+    <Text style={styles.detailValue}>
+      {value}
+    </Text>
+  </View>
+);
 
 export default function BookingConfirmationScreen({
   route,
   navigation,
 }) {
-  const { t } = useTranslation();
+  const booking = route?.params?.booking;
+  const equipment = route?.params?.equipment;
 
-  const { booking, equipment } = route.params;
+  const openTab = (screen) => {
+    // Remove the completed booking form from navigation.
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: 'FarmerTabs',
+          params: { screen },
+        },
+      ],
+    });
+  };
 
-  // BookingScreen.js sends booking data using snake_case
-  // while some responses may use camelCase.
-  // Keep all fallbacks so the screen remains safe.
-  const ownerName =
-    booking?.owner_name ||
-    booking?.ownerName ||
-    equipment?.owner_name ||
-    equipment?.ownerName;
+  if (!booking?.id) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.missingContainer}>
+          <Text style={styles.heading}>
+            Booking details unavailable
+          </Text>
 
-  const ownerPhone =
-    booking?.owner_phone ||
-    booking?.ownerPhone ||
-    equipment?.owner_phone ||
-    equipment?.ownerPhone;
+          <Text style={styles.subtitle}>
+            Check My Bookings before submitting
+            another request.
+          </Text>
 
-  const bookingId =
-    booking?.id ||
-    booking?.booking_id ||
-    booking?.bookingId;
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() => openTab('My Bookings')}
+          >
+            <Text style={styles.primaryText}>
+              Open My Bookings
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const amount = Number(booking.total_amount);
+
+  const validAmount =
+    booking.total_amount != null &&
+    Number.isFinite(amount) &&
+    amount > 0;
+
+  const formattedAmount = validAmount
+    ? `₹${amount.toLocaleString('en-IN', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`
+    : 'Amount needs review';
 
   const equipmentName =
+    booking.equipment_name ||
     equipment?.name ||
-    booking?.equipmentName ||
-    booking?.equipment_name;
+    'Equipment';
 
-  const startDate =
-    booking?.start_date ||
-    booking?.startDate;
+  const providerName =
+    booking.owner_name ||
+    equipment?.owner_name ||
+    'Not available';
 
-  const endDate =
-    booking?.end_date ||
-    booking?.endDate;
-
-  const landSize =
-    booking?.land_size ||
-    booking?.landSize;
+  const providerPhone =
+    booking.owner_phone ||
+    equipment?.owner_phone ||
+    'Not provided';
 
   const paymentMethod =
-    booking?.payment_method ||
-    booking?.paymentMethod;
+    PAYMENT_METHOD_LABELS[booking.payment_method] ||
+    booking.payment_method ||
+    'Not specified';
 
-  const handleContactProvider = () => {
-    Alert.alert(
-      t('contactProvider'),
-      `${t('provider')}: ${
-        ownerName || t('notAvailable')
-      }\n${t('phone')}: ${
-        ownerPhone || t('notAvailable')
-      }`,
-      [
-        {
-          text: t('close'),
-          style: 'cancel',
-        },
-      ]
-    );
-  };
+  const paymentTiming =
+    booking.payment_timing === 'pay_later'
+      ? 'Pay Later'
+      : booking.payment_timing === 'pay_now'
+        ? 'Advance payment requested'
+        : 'Not specified';
 
-  const handleTrackBooking = () => {
-    navigation.navigate('FarmerTabs', {
-      screen: 'My Bookings',
-    });
-  };
+  const paymentStatus =
+    booking.payment_status === 'paid'
+      ? 'Received'
+      : booking.payment_status === 'pending'
+        ? 'Pending'
+        : booking.payment_status || 'Not confirmed';
 
-  const handleBackHome = () => {
-    navigation.navigate('FarmerTabs', {
-      screen: 'Home',
-    });
-  };
+  const pricingUnit =
+    booking.pricing_type === 'per_acre'
+      ? 'Per Acre'
+      : booking.pricing_type === 'per_day'
+        ? 'Per Day'
+        : 'Not specified';
+
+  const statusLabel =
+    STATUS_LABELS[booking.status] ||
+    booking.status ||
+    'Not available';
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Success Icon Block */}
-        <View style={styles.successBlock}>
-          <View style={styles.checkmarkCircle}>
-            <Ionicons
-              name="checkmark"
-              size={56}
-              color="#fff"
-            />
-          </View>
+        <View style={styles.successIcon}>
+          <Ionicons
+            name="checkmark-circle"
+            size={76}
+            color="#2E7D32"
+          />
+        </View>
 
-          <Text style={styles.title}>
-            {t('bookingSuccessful')}
-          </Text>
+        <Text style={styles.heading}>
+          Booking Request Saved
+        </Text>
 
-          <Text style={styles.subtitle}>
-            {t('bookingRequestSent')}
+        <Text style={styles.subtitle}>
+          Your request has been recorded. Track
+          provider approval and service progress in
+          My Bookings.
+        </Text>
+
+        <View style={styles.bookingBadge}>
+          <Text style={styles.bookingBadgeText}>
+            Booking #{booking.id}
           </Text>
         </View>
 
-        {/* Booking Info Card */}
         <View style={styles.card}>
-          {/* Booking ID */}
-          <View style={styles.row}>
-            <Text style={styles.label}>
-              {t('bookingId')}
+          <Text style={styles.sectionTitle}>
+            Booking Details
+          </Text>
+
+          <DetailRow
+            label="Equipment"
+            value={equipmentName}
+          />
+
+          <DetailRow
+            label="Start date"
+            value={formatDate(booking.start_date)}
+          />
+
+          <DetailRow
+            label="End date"
+            value={formatDate(booking.end_date)}
+          />
+
+          <DetailRow
+            label="Land size"
+            value={
+              booking.land_size != null
+                ? `${booking.land_size} acres`
+                : 'Not specified'
+            }
+          />
+
+          <DetailRow
+            label="Farm location"
+            value={
+              booking.farm_location ||
+              'Not provided'
+            }
+          />
+
+          <DetailRow
+            label="Pricing"
+            value={pricingUnit}
+          />
+
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>
+              Booking Amount
             </Text>
 
-            <Text style={styles.bookingId}>
-              {bookingId || t('pending')}
+            <Text style={styles.totalAmount}>
+              {formattedAmount}
             </Text>
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* Equipment */}
-          <View style={styles.row}>
-            <Text style={styles.label}>
-              {t('equipment')}
-            </Text>
-
-            <Text style={styles.value}>
-              {equipmentName || '—'}
-            </Text>
-          </View>
-
-          {/* Start Date */}
-          <View style={styles.row}>
-            <Text style={styles.label}>
-              {t('startDate')}
-            </Text>
-
-            <Text style={styles.value}>
-              {startDate
-                ? formatDate(startDate)
-                : '—'}
-            </Text>
-          </View>
-
-          {/* End Date */}
-          <View style={styles.row}>
-            <Text style={styles.label}>
-              {t('endDate')}
-            </Text>
-
-            <Text style={styles.value}>
-              {endDate
-                ? formatDate(endDate)
-                : '—'}
-            </Text>
-          </View>
-
-          {/* Land Size */}
-          <View style={styles.row}>
-            <Text style={styles.label}>
-              {t('landSize')}
-            </Text>
-
-            <Text style={styles.value}>
-              {landSize
-                ? `${landSize} ${t('acres')}`
-                : '—'}
-            </Text>
-          </View>
-
-          {/* Payment Method */}
-          <View style={styles.row}>
-            <Text style={styles.label}>
-              {t('paymentMethod')}
-            </Text>
-
-            <Text style={styles.value}>
-              {paymentMethod || '—'}
-            </Text>
-          </View>
-
-          {/* Status */}
-          <View style={styles.row}>
-            <Text style={styles.label}>
-              {t('status')}
-            </Text>
-
-            <View style={styles.statusBadge}>
-              <View style={styles.statusDot} />
-
-              <Text style={styles.statusText}>
-                {t('pendingApproval')}
-              </Text>
-            </View>
           </View>
         </View>
 
-        {/* Action Buttons */}
-        <View style={styles.btnGroup}>
-          {/* Track Booking */}
-          <TouchableOpacity
-            style={styles.primaryBtn}
-            onPress={handleTrackBooking}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.primaryBtnText}>
-              {t('trackBookingStatus')}
-            </Text>
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Current Status
+          </Text>
 
+          <View style={styles.statusBox}>
             <Ionicons
-              name="time-outline"
-              size={18}
-              color="#fff"
-            />
-          </TouchableOpacity>
-
-          {/* Contact Provider */}
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={handleContactProvider}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="chatbox-ellipses-outline"
-              size={18}
+              name="information-circle-outline"
+              size={22}
               color="#2E7D32"
             />
 
-            <Text style={styles.secondaryBtnText}>
-              {t('contactEquipmentProvider')}
+            <Text style={styles.statusText}>
+              {statusLabel}
             </Text>
-          </TouchableOpacity>
+          </View>
 
-          {/* Back Home */}
-          <TouchableOpacity
-            style={styles.linkBtn}
-            onPress={handleBackHome}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.linkText}>
-              {t('backToHome')}
+          {booking.status === 'pending' && (
+            <Text style={styles.note}>
+              Saving a request does not mean the
+              provider has accepted it yet.
             </Text>
-          </TouchableOpacity>
+          )}
+
+          <Text style={styles.note}>
+            This is the status returned when the
+            request was saved. Open My Bookings for
+            the latest updates.
+          </Text>
         </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Payment Details
+          </Text>
+
+          <DetailRow
+            label="Payment timing"
+            value={paymentTiming}
+          />
+
+          <DetailRow
+            label="Payment method"
+            value={paymentMethod}
+          />
+
+          <DetailRow
+            label="Payment status"
+            value={paymentStatus}
+          />
+
+          {booking.payment_status !== 'paid' && (
+            <Text style={styles.note}>
+              This screen does not confirm a payment.
+              Arrange payment with the provider after
+              work completion. The provider records
+              receipt in the app.
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Provider
+          </Text>
+
+          <DetailRow
+            label="Name"
+            value={providerName}
+          />
+
+          <DetailRow
+            label="Phone"
+            value={providerPhone}
+          />
+        </View>
+
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={() => openTab('My Bookings')}
+        >
+          <Ionicons
+            name="calendar-outline"
+            size={21}
+            color="#FFFFFF"
+          />
+
+          <Text style={styles.primaryText}>
+            Track in My Bookings
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={() => openTab('Home')}
+        >
+          <Text style={styles.secondaryText}>
+            Back to Home
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -266,176 +353,165 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F5DC',
   },
 
-  scroll: {
+  content: {
     padding: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexGrow: 1,
+    paddingBottom: 40,
   },
 
-  successBlock: {
+  successIcon: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginTop: 16,
+    marginBottom: 12,
   },
 
-  checkmarkCircle: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: '#2E7D32',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-
-    shadowColor: '#2E7D32',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-
-  title: {
-    fontSize: 24,
+  heading: {
+    fontSize: 25,
     fontWeight: '800',
-    color: '#1B1B1B',
-    marginBottom: 8,
+    color: '#2E7D32',
     textAlign: 'center',
+    marginBottom: 10,
   },
 
   subtitle: {
     fontSize: 14,
-    color: '#666',
+    lineHeight: 22,
+    color: '#666666',
     textAlign: 'center',
-    paddingHorizontal: 20,
+    marginBottom: 18,
+  },
+
+  bookingBadge: {
+    alignSelf: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginBottom: 22,
+  },
+
+  bookingBadgeText: {
+    color: '#2E7D32',
+    fontSize: 15,
+    fontWeight: '800',
   },
 
   card: {
-    width: '100%',
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 24,
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
-
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
   },
 
-  row: {
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#222222',
+    marginBottom: 15,
+  },
+
+  detailRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginVertical: 8,
+    gap: 14,
+    marginBottom: 12,
   },
 
-  label: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
+  detailLabel: {
     flex: 1,
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#777777',
   },
 
-  bookingId: {
+  detailValue: {
+    flex: 1.4,
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#333333',
+    fontWeight: '600',
+    textAlign: 'right',
+  },
+
+  totalRow: {
+    borderTopWidth: 1,
+    borderTopColor: '#EEEEEE',
+    paddingTop: 14,
+    marginTop: 4,
+  },
+
+  totalLabel: {
     fontSize: 15,
+    color: '#333333',
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+
+  totalAmount: {
+    fontSize: 26,
     fontWeight: '800',
     color: '#2E7D32',
   },
 
-  value: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1B1B1B',
-    textAlign: 'right',
-    flex: 1,
-  },
-
-  divider: {
-    height: 1,
-    backgroundColor: '#E0E0E0',
-    marginVertical: 8,
-  },
-
-  statusBadge: {
+  statusBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF3E0',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#FF9800',
-    marginRight: 6,
+    gap: 8,
+    backgroundColor: '#E8F5E9',
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 10,
   },
 
   statusText: {
-    fontSize: 12,
+    flex: 1,
+    fontSize: 14,
     fontWeight: '700',
-    color: '#E65100',
+    color: '#2E7D32',
   },
 
-  btnGroup: {
-    width: '100%',
-    gap: 12,
+  note: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#666666',
+    marginTop: 6,
   },
 
-  primaryBtn: {
-    backgroundColor: '#2E7D32',
+  primaryButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    borderRadius: 14,
-    paddingVertical: 16,
+    backgroundColor: '#2E7D32',
+    minHeight: 54,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    marginTop: 4,
   },
 
-  primaryBtnText: {
-    color: '#fff',
+  primaryText: {
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '800',
+    textAlign: 'center',
   },
 
-  secondaryBtn: {
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#2E7D32',
-    flexDirection: 'row',
+  secondaryButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    borderRadius: 14,
-    paddingVertical: 16,
+    minHeight: 50,
+    marginTop: 10,
   },
 
-  secondaryBtnText: {
+  secondaryText: {
     color: '#2E7D32',
     fontSize: 15,
     fontWeight: '700',
   },
 
-  linkBtn: {
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-
-  linkText: {
-    color: '#8D6E63',
-    fontWeight: '700',
-    fontSize: 15,
+  missingContainer: {
+    flex: 1,
+    padding: 24,
+    justifyContent: 'center',
   },
 });

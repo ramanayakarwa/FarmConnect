@@ -1,4 +1,9 @@
-import React from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   View,
@@ -8,355 +13,437 @@ import {
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
+  ActivityIndicator,
   Alert,
-  Dimensions,
+  Linking,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
-import { useTranslation } from 'react-i18next';
+import { useFocusEffect } from '@react-navigation/native';
 
-import { formatPrice } from '../../utils/helpers';
-import { getEquipmentLocalImage } from '../../utils/equipmentImages';
+import equipmentService from '../../services/equipmentService';
 
-const { width } = Dimensions.get('window');
+const LOCAL_IMAGES = {
+  Tractor: require('../../../assets/tractor.jpeg'),
+  Rotavator: require('../../../assets/rotavator.jpeg'),
+  'Seed Drill': require('../../../assets/seed_drill.jpeg'),
+  'Boom Sprayer': require('../../../assets/boom_sprayer.jpeg'),
+};
+export default function EquipmentDetailScreen({
+  route,
+  navigation,
+}) {
+  const initialEquipment = route?.params?.equipment;
+  const equipmentId = initialEquipment?.id;
 
-export default function EquipmentDetailScreen({ route, navigation }) {
-  const { t } = useTranslation();
+  const [equipment, setEquipment] =
+    useState(initialEquipment || null);
 
-  const equipment = route?.params?.equipment;
+  const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState('');
+  const [imageFailed, setImageFailed] = useState(false);
 
-  if (!equipment) {
-    return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: 'center',
-          alignItems: 'center',
-        }}
-      >
-        <Text>{t('noEquipmentReceived')}</Text>
-      </View>
-    );
-  }
+  const requestVersion = useRef(0);
+  const bookingLock = useRef(false);
 
-  const equipmentData = {
-    ...equipment,
-    ownerName: equipment.owner_name,
-    ownerPhone: equipment.owner_phone,
+  const imageUrl =
+    typeof equipment?.image === 'string'
+      ? equipment.image.trim()
+      : '';
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [equipment?.id, imageUrl]);
+
+  const loadEquipment = useCallback(async () => {
+    const version = ++requestVersion.current;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      if (!equipmentId) {
+        throw new Error('Equipment details are missing.');
+      }
+
+      const response =
+        await equipmentService.getEquipmentById(
+          equipmentId
+        );
+
+      if (version !== requestVersion.current) return;
+
+      if (!response?.data?.id) {
+        throw new Error('Equipment could not be loaded.');
+      }
+
+      setEquipment(response.data);
+    } catch (err) {
+      if (version !== requestVersion.current) return;
+
+      setError(
+        err.response?.data?.message ||
+          err.message ||
+          'Unable to load equipment.'
+      );
+    } finally {
+      if (version === requestVersion.current) {
+        setLoading(false);
+      }
+    }
+  }, [equipmentId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      bookingLock.current = false;
+      setChecking(false);
+      loadEquipment();
+
+      return () => {
+        requestVersion.current += 1;
+      };
+    }, [loadEquipment])
+  );
+
+  const handleBooking = async () => {
+    if (
+      bookingLock.current ||
+      loading ||
+      error ||
+      !equipmentId
+    ) {
+      return;
+    }
+
+    bookingLock.current = true;
+    setChecking(true);
+
+    const version = ++requestVersion.current;
+
+    try {
+      const response =
+        await equipmentService.getEquipmentById(
+          equipmentId
+        );
+
+      if (version !== requestVersion.current) return;
+
+      const latest = response?.data;
+
+      if (!latest?.id) {
+        throw new Error('Equipment could not be loaded.');
+      }
+
+      setEquipment(latest);
+
+      if (latest.availability !== true) {
+        Alert.alert(
+          'Not available',
+          'The provider has made this equipment unavailable.'
+        );
+        return;
+      }
+
+      const rate = Number(latest.price);
+
+      if (
+        !Number.isFinite(rate) ||
+        rate <= 0 ||
+        !['per_acre', 'per_day'].includes(
+          latest.pricing_type
+        )
+      ) {
+        Alert.alert(
+          'Price unavailable',
+          'The provider needs to configure a valid rental rate.'
+        );
+        return;
+      }
+
+      // Pass the freshly fetched rate and availability.
+      navigation.navigate('Booking', {
+        equipment: latest,
+      });
+    } catch (err) {
+      if (version !== requestVersion.current) return;
+
+      Alert.alert(
+        'Unable to continue',
+        err.response?.data?.message ||
+          err.message ||
+          'Please try again.'
+      );
+    } finally {
+      if (version === requestVersion.current) {
+        bookingLock.current = false;
+        setChecking(false);
+      }
+    }
   };
 
-  const handleContactOwner = () => {
-    Alert.alert(
-      t('contactOwner'),
-      `${t('ownerName')}: ${equipmentData.ownerName}\n${t(
-        'phoneNumber'
-      )}: ${equipmentData.ownerPhone}`,
-      [
-        {
-          text: t('cancel'),
-          style: 'cancel',
-        },
-        {
-          text: t('call'),
-          onPress: () =>
-            Alert.alert(
-              t('simulatingCall'),
-              t('callingOwner')
-            ),
-        },
-      ]
-    );
+  const handleCall = async () => {
+    const phone = String(
+      equipment?.owner_phone || ''
+    ).trim();
+
+    if (!phone) {
+      Alert.alert(
+        'Contact unavailable',
+        'The provider has not supplied a phone number.'
+      );
+      return;
+    }
+
+    const dialNumber = phone.replace(/[^\d+]/g, '');
+
+    if (!/\d/.test(dialNumber)) {
+      Alert.alert(
+        'Invalid number',
+        'The provider’s phone number is not valid.'
+      );
+      return;
+    }
+
+    try {
+      await Linking.openURL(`tel:${dialNumber}`);
+    } catch {
+      Alert.alert(
+        'Contact provider',
+        `Please call ${phone}.`
+      );
+    }
   };
+
+  const available = equipment?.availability === true;
+  const rate = Number(equipment?.price);
+
+  const validPricing =
+    Number.isFinite(rate) &&
+    rate > 0 &&
+    ['per_acre', 'per_day'].includes(
+      equipment?.pricing_type
+    );
+
+  const perAcre =
+    equipment?.pricing_type === 'per_acre';
+
+  const canBook =
+    available &&
+    validPricing &&
+    !loading &&
+    !checking &&
+    !error;
+
+  const imageSource =
+    /^https?:\/\//i.test(imageUrl) && !imageFailed
+      ? { uri: imageUrl }
+      : LOCAL_IMAGES[equipment?.category];
 
   return (
     <SafeAreaView style={styles.safe}>
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.iconButton}
+          accessibilityLabel="Go back"
+        >
+          <Ionicons
+            name="arrow-back"
+            size={24}
+            color="#222222"
+          />
+        </TouchableOpacity>
+
+        <Text style={styles.headerTitle}>
+          Equipment Details
+        </Text>
+
+        <TouchableOpacity
+          onPress={loadEquipment}
+          disabled={loading || checking}
+          style={styles.iconButton}
+          accessibilityLabel="Refresh equipment"
+        >
+          <Ionicons
+            name="refresh-outline"
+            size={23}
+            color="#2E7D32"
+          />
+        </TouchableOpacity>
+      </View>
+
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* ================= TOP IMAGE ================= */}
+        {loading && (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color="#2E7D32" />
+            <Text>Checking current details…</Text>
+          </View>
+        )}
 
-        <View style={styles.imageContainer}>
-          <Image
-            source={getEquipmentLocalImage(equipmentData)}
-            style={styles.image}
-            resizeMode="cover"
-          />
-
-          <TouchableOpacity
-            style={styles.backBtn}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons
-              name="arrow-back"
-              size={24}
-              color="#1B1B1B"
-            />
-          </TouchableOpacity>
-
-          <View
-            style={[
-              styles.availBadge,
-              {
-                backgroundColor: equipmentData.availability
-                  ? '#E8F5E9'
-                  : '#FFEBEE',
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.availDot,
-                {
-                  backgroundColor:
-                    equipmentData.availability
-                      ? '#4CAF50'
-                      : '#F44336',
-                },
-              ]}
-            />
-
-            <Text
-              style={[
-                styles.availText,
-                {
-                  color: equipmentData.availability
-                    ? '#2E7D32'
-                    : '#F44336',
-                },
-              ]}
-            >
-              {equipmentData.availability
-                ? t('available')
-                : t('booked')}
+        {!!error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>
+              {error}
+            </Text>
+            <Text style={styles.errorText}>
+              Refresh to verify availability before booking.
             </Text>
           </View>
-        </View>
+        )}
 
-        {/* ================= CONTENT ================= */}
+        {equipment && (
+          <>
+            {imageSource ? (
+              <Image
+                source={imageSource}
+                style={styles.image}
+                resizeMode="cover"
+                onError={() => setImageFailed(true)}
+              />
+            ) : (
+              <View style={styles.placeholder}>
+                <Ionicons
+                  name="construct-outline"
+                  size={60}
+                  color="#2E7D32"
+                />
+                <Text style={styles.placeholderText}>
+                  {equipment.category || 'Equipment'}
+                </Text>
+              </View>
+            )}
 
-        <View style={styles.body}>
-          {/* ================= HEADER ================= */}
-
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.name}>
-                {equipmentData.name}
+            <View style={styles.card}>
+              <Text style={styles.category}>
+                {equipment.category}
               </Text>
 
-              <View style={styles.categoryBadge}>
-                <Text style={styles.categoryText}>
-                  {equipmentData.category}
+              <Text style={styles.name}>
+                {equipment.name}
+              </Text>
+
+              <Text
+                style={[
+                  styles.availability,
+                  {
+                    color: available
+                      ? '#2E7D32'
+                      : '#C62828',
+                  },
+                ]}
+              >
+                {loading
+                  ? 'Checking availability…'
+                  : error
+                    ? 'Availability not verified'
+                    : available
+                      ? 'Available'
+                      : 'Not Available'}
+              </Text>
+
+              <Text style={styles.price}>
+                {validPricing
+                  ? `₹${rate.toLocaleString('en-IN', {
+                      maximumFractionDigits: 2,
+                    })} / ${perAcre ? 'acre' : 'day'}`
+                  : 'Price not configured'}
+              </Text>
+
+              {validPricing && (
+                <Text style={styles.bodyText}>
+                  {perAcre
+                    ? 'Your total is the rental rate multiplied by the number of acres.'
+                    : 'Your total is the rental rate multiplied by the number of booking days. Start and end dates are both included.'}
+                </Text>
+              )}
+
+              <View style={styles.locationRow}>
+                <Ionicons
+                  name="location-outline"
+                  size={19}
+                  color="#777777"
+                />
+                <Text style={styles.locationText}>
+                  {equipment.location ||
+                    'Location not provided'}
                 </Text>
               </View>
             </View>
 
-            <View style={styles.ratingBadge}>
-              <Ionicons
-                name="star"
-                size={14}
-                color="#FFC107"
-              />
-
-              <Text style={styles.ratingText}>
-                {equipmentData.rating || '4.5'}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>
+                Description
               </Text>
-            </View>
-          </View>
 
-          {/* ================= PRICE ================= */}
-
-          <View style={styles.priceRow}>
-            <Text style={styles.price}>
-              {formatPrice(equipmentData.price)}
-            </Text>
-
-            <View style={styles.distRow}>
-              <Ionicons
-                name="navigate-circle-outline"
-                size={16}
-                color="#8D6E63"
-              />
-
-              <Text style={styles.distanceText}>
-                {equipmentData.distance ||
-                  t('nearby')}
-              </Text>
-            </View>
-          </View>
-
-          {/* ================= LOCATION ================= */}
-
-          <View style={styles.locationRow}>
-            <Ionicons
-              name="location"
-              size={16}
-              color="#2E7D32"
-            />
-
-            <Text style={styles.locationText}>
-              {equipmentData.location}
-            </Text>
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* ================= ABOUT ================= */}
-
-          <Text style={styles.sectionTitle}>
-            {t('aboutEquipment')}
-          </Text>
-
-          <Text style={styles.description}>
-            {equipmentData.description ||
-              t('defaultEquipmentDescription')}
-          </Text>
-
-          <View style={styles.divider} />
-
-          {/* ================= SPECIFICATIONS ================= */}
-
-          <Text style={styles.sectionTitle}>
-            {t('specifications')}
-          </Text>
-
-          <View style={styles.specsGrid}>
-            {equipmentData.specifications ? (
-              Object.entries(
-                equipmentData.specifications
-              ).map(([key, value]) => (
-                <View
-                  key={key}
-                  style={styles.specCard}
-                >
-                  <Text style={styles.specKey}>
-                    {key.toUpperCase()}
-                  </Text>
-
-                  <Text style={styles.specVal}>
-                    {value}
-                  </Text>
-                </View>
-              ))
-            ) : (
-              <>
-                <View style={styles.specCard}>
-                  <Text style={styles.specKey}>
-                    {t('condition').toUpperCase()}
-                  </Text>
-
-                  <Text style={styles.specVal}>
-                    {t('excellent')}
-                  </Text>
-                </View>
-
-                <View style={styles.specCard}>
-                  <Text style={styles.specKey}>
-                    {t('year').toUpperCase()}
-                  </Text>
-
-                  <Text style={styles.specVal}>
-                    2022
-                  </Text>
-                </View>
-
-                <View style={styles.specCard}>
-                  <Text style={styles.specKey}>
-                    {t('power').toUpperCase()}
-                  </Text>
-
-                  <Text style={styles.specVal}>
-                    {t('standard')}
-                  </Text>
-                </View>
-              </>
-            )}
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* ================= OWNER ================= */}
-
-          <Text style={styles.sectionTitle}>
-            {t('equipmentOwner')}
-          </Text>
-
-          <View style={styles.ownerCard}>
-            <View style={styles.ownerAvatar}>
-              <Text style={styles.avatarText}>
-                {equipmentData.ownerName
-                  ? equipmentData.ownerName[0]
-                  : 'O'}
+              <Text style={styles.bodyText}>
+                {equipment.description ||
+                  'No description provided.'}
               </Text>
             </View>
 
-            <View style={styles.ownerInfo}>
-              <Text style={styles.ownerName}>
-                {equipmentData.ownerName}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>
+                Equipment Provider
               </Text>
 
-              <Text style={styles.ownerRole}>
-                {t('verifiedProvider')}
+              <Text style={styles.providerName}>
+                {equipment.owner_name ||
+                  'Provider name unavailable'}
               </Text>
+
+              <Text style={styles.bodyText}>
+                {equipment.owner_phone ||
+                  'Phone number not provided'}
+              </Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.contactButton,
+                  !equipment.owner_phone &&
+                    styles.disabled,
+                ]}
+                onPress={handleCall}
+                disabled={!equipment.owner_phone}
+              >
+                <Ionicons
+                  name="call-outline"
+                  size={19}
+                  color="#2E7D32"
+                />
+                <Text style={styles.contactText}>
+                  Call Provider
+                </Text>
+              </TouchableOpacity>
             </View>
-
-            <TouchableOpacity
-              style={styles.contactIconBtn}
-              onPress={handleContactOwner}
-            >
-              <Ionicons
-                name="call"
-                size={20}
-                color="#fff"
-              />
-            </TouchableOpacity>
-          </View>
-        </View>
+          </>
+        )}
       </ScrollView>
-
-      {/* ================= FOOTER ================= */}
 
       <View style={styles.footer}>
         <TouchableOpacity
-          style={styles.contactBtn}
-          onPress={handleContactOwner}
-        >
-          <Ionicons
-            name="chatbubble-ellipses-outline"
-            size={20}
-            color="#2E7D32"
-          />
-
-          <Text style={styles.contactBtnText}>
-            {t('contactOwner')}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
           style={[
-            styles.bookBtn,
-            !equipmentData.availability &&
-              styles.bookBtnDisabled,
+            styles.bookButton,
+            !canBook && styles.disabled,
           ]}
-          disabled={!equipmentData.availability}
-          onPress={() =>
-            navigation.navigate('Booking', {
-              equipment: equipmentData,
-            })
-          }
+          disabled={!canBook}
+          onPress={handleBooking}
         >
-          <Text style={styles.bookBtnText}>
-            {equipmentData.availability
-              ? t('bookNow')
-              : t('currentlyBooked')}
-          </Text>
-
-          {equipmentData.availability && (
-            <Ionicons
-              name="arrow-forward"
-              size={18}
-              color="#fff"
-            />
+          {checking || loading ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.bookText}>
+              {error
+                ? 'Refresh Details to Continue'
+                : !available
+                  ? 'Not Available'
+                  : !validPricing
+                    ? 'Price Not Configured'
+                    : 'Continue to Booking'}
+            </Text>
           )}
         </TouchableOpacity>
       </View>
@@ -364,412 +451,191 @@ export default function EquipmentDetailScreen({ route, navigation }) {
   );
 }
 
-
-/* =========================================================
-   STYLES
-========================================================= */
-
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: '#F5F5DC',
   },
 
-  scroll: {
-    paddingBottom: 100,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
   },
 
-  imageContainer: {
-    width: '100%',
-    height: 260,
-    position: 'relative',
+  iconButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  headerTitle: {
+    flex: 1,
+    fontSize: 19,
+    fontWeight: '800',
+    textAlign: 'center',
+    color: '#222222',
+  },
+
+  content: {
+    padding: 16,
+    paddingBottom: 24,
+  },
+
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+
+  errorBox: {
+    padding: 14,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 10,
+    marginBottom: 14,
+  },
+
+  errorText: {
+    color: '#B71C1C',
+    lineHeight: 21,
   },
 
   image: {
     width: '100%',
-    height: '100%',
-  },
-
-  backBtn: {
-    position: 'absolute',
-    top: 20,
-    left: 20,
-
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-
-    backgroundColor:
-      'rgba(255, 255, 255, 0.9)',
-
-    justifyContent: 'center',
-    alignItems: 'center',
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-
-    elevation: 5,
-  },
-
-  availBadge: {
-    position: 'absolute',
-    bottom: 16,
-    right: 16,
-
-    flexDirection: 'row',
-    alignItems: 'center',
-
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-
+    height: 220,
     borderRadius: 16,
-
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-
-    elevation: 3,
+    marginBottom: 16,
   },
 
-  availDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
+  placeholder: {
+    height: 220,
+    borderRadius: 16,
+    backgroundColor: '#E8F5E9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
   },
 
-  availText: {
+  placeholderText: {
+    color: '#2E7D32',
+    fontWeight: '700',
+    fontSize: 18,
+    marginTop: 12,
+  },
+
+  card: {
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+
+  category: {
+    color: '#8D6E63',
     fontSize: 13,
     fontWeight: '700',
-  },
-
-  body: {
-    padding: 20,
-
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-
-    backgroundColor: '#F5F5DC',
-
-    marginTop: -20,
-  },
-
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-
-    marginBottom: 12,
-  },
-
-  name: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#1B1B1B',
     marginBottom: 6,
   },
 
-  categoryBadge: {
-    backgroundColor: '#E8F5E9',
-
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-
-    borderRadius: 8,
-
-    alignSelf: 'flex-start',
-  },
-
-  categoryText: {
-    color: '#2E7D32',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  ratingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-
-    backgroundColor: '#FFF8E1',
-
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-
-    borderRadius: 10,
-  },
-
-  ratingText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#F59E0B',
-    marginLeft: 4,
-  },
-
-  priceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-
+  name: {
+    fontSize: 23,
+    fontWeight: '800',
+    color: '#222222',
     marginBottom: 10,
   },
 
+  availability: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 12,
+  },
+
   price: {
-    fontSize: 26,
-    fontWeight: '900',
+    fontSize: 24,
+    fontWeight: '800',
     color: '#2E7D32',
+    marginBottom: 8,
   },
 
-  distRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-
-  distanceText: {
-    fontSize: 13,
-    color: '#8D6E63',
-    fontWeight: '600',
+  bodyText: {
+    color: '#666666',
+    fontSize: 14,
+    lineHeight: 22,
   },
 
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-
-    marginBottom: 10,
+    gap: 8,
+    marginTop: 14,
   },
 
   locationText: {
+    flex: 1,
+    color: '#666666',
     fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
-  },
-
-  divider: {
-    height: 1.5,
-    backgroundColor: '#E0E0E0',
-    marginVertical: 18,
   },
 
   sectionTitle: {
+    color: '#222222',
     fontSize: 18,
     fontWeight: '800',
-    color: '#1B1B1B',
     marginBottom: 10,
   },
 
-  description: {
-    fontSize: 15,
-    color: '#555',
-    lineHeight: 22,
-  },
-
-  specsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginTop: 4,
-  },
-
-  specCard: {
-    width: (width - 50) / 2,
-
-    backgroundColor: '#fff',
-
-    borderRadius: 12,
-
-    padding: 12,
-
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-
-    shadowColor: '#000',
-
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-
-    elevation: 1,
-  },
-
-  specKey: {
-    fontSize: 11,
-    color: '#8D6E63',
+  providerName: {
+    color: '#333333',
+    fontSize: 17,
     fontWeight: '700',
-    marginBottom: 4,
+    marginBottom: 5,
   },
 
-  specVal: {
-    fontSize: 14,
-    color: '#1B1B1B',
-    fontWeight: '600',
-  },
-
-  ownerCard: {
+  contactButton: {
     flexDirection: 'row',
     alignItems: 'center',
-
-    backgroundColor: '#fff',
-
-    borderRadius: 16,
-
-    padding: 14,
-
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-
-    marginTop: 4,
-  },
-
-  ownerAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-
-    backgroundColor: '#8D6E63',
-
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  avatarText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-
-  ownerInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-
-  ownerName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1B1B1B',
-  },
-
-  ownerRole: {
-    fontSize: 12,
-    color: '#8D6E63',
-    fontWeight: '500',
-  },
-
-  contactIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-
-    backgroundColor: '#2E7D32',
-
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  footer: {
-    position: 'absolute',
-
-    bottom: 0,
-    left: 0,
-    right: 0,
-
-    backgroundColor: '#fff',
-
-    padding: 16,
-
-    flexDirection: 'row',
-    gap: 12,
-
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-
-    shadowColor: '#000',
-
-    shadowOffset: {
-      width: 0,
-      height: -4,
-    },
-
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-
-    elevation: 10,
-  },
-
-  contactBtn: {
-    flex: 1,
-
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-
-    gap: 6,
-
-    borderWidth: 2,
     borderColor: '#2E7D32',
-
-    borderRadius: 14,
-
-    paddingVertical: 14,
+    borderRadius: 10,
+    marginTop: 14,
   },
 
-  contactBtnText: {
+  contactText: {
     color: '#2E7D32',
     fontWeight: '700',
     fontSize: 15,
   },
 
-  bookBtn: {
-    flex: 1.3,
+  footer: {
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
 
+  bookButton: {
     backgroundColor: '#2E7D32',
-
-    flexDirection: 'row',
+    minHeight: 52,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-
-    gap: 6,
-
-    borderRadius: 14,
-
-    paddingVertical: 14,
-
-    shadowColor: '#2E7D32',
-
-    shadowOffset: {
-      width: 0,
-      height: 3,
-    },
-
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-
-    elevation: 4,
+    paddingHorizontal: 12,
   },
 
-  bookBtnDisabled: {
-    backgroundColor: '#B0BEC5',
-    shadowOpacity: 0,
-  },
-
-  bookBtnText: {
-    color: '#fff',
-    fontWeight: '800',
+  bookText: {
+    color: '#FFFFFF',
     fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+
+  disabled: {
+    opacity: 0.5,
   },
 });

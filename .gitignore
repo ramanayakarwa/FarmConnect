@@ -4,3 +4,14 @@ node_modules/
 dist/
 build/
 *.log
+# Local dependencies and settings
+node_modules/
+.expo/
+.env
+.env.*
+!.env.example
+
+# Temporary backups
+*.bak
+*.before-navigation-fix.json
+*.sdk57.backup.json
